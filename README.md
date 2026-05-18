@@ -9,6 +9,11 @@ traversal in production.
 [![Open DeskCall web app](https://img.shields.io/badge/Open-Web%20app-111827?style=for-the-badge&logo=googlechrome)](https://monaghanhc.github.io/Video-Chat/)
 [![Deploy signaling server to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/monaghanhc/Video-Chat)
 
+Live beta endpoints:
+
+- Web app: `https://monaghanhc.github.io/Video-Chat/`
+- Signaling server: `https://deskcall-signaling.onrender.com`
+
 ## Monorepo layout
 
 ```text
@@ -56,8 +61,8 @@ VITE_SIGNALING_SERVER_URL=http://localhost:4000
 DESKCALL_SIGNALING_SERVER_URL=http://localhost:4000
 ```
 
-The desktop app reads a default signaling URL from configuration, then lets each user override and
-persist it inside the Settings panel.
+The shipped app defaults to the public signaling backend at `https://deskcall-signaling.onrender.com`,
+then lets each user override and persist that value inside the Settings panel.
 
 ## Installable web app
 
