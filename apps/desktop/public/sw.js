@@ -1,12 +1,12 @@
 const CACHE_NAME = 'deskcall-shell-v1';
 const APP_SHELL = [
-  '/',
-  '/index.html',
-  '/manifest.webmanifest',
-  '/favicon.png',
-  '/apple-touch-icon.png',
-  '/pwa-192x192.png',
-  '/pwa-512x512.png'
+  './',
+  './index.html',
+  './manifest.webmanifest',
+  './favicon.png',
+  './apple-touch-icon.png',
+  './pwa-192x192.png',
+  './pwa-512x512.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -38,7 +38,7 @@ self.addEventListener('fetch', (event) => {
 
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match('/index.html').then((response) => response!))
+      fetch(event.request).catch(() => caches.match('./index.html').then((response) => response!))
     );
     return;
   }
@@ -57,4 +57,3 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
-

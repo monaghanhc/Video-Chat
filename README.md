@@ -5,6 +5,9 @@ Express, Socket.IO, and WebRTC. The MVP is intentionally free to run: the media 
 the signaling server is lightweight, and no paid service is required until you need stronger NAT
 traversal in production.
 
+[![Download DeskCall for Windows](https://img.shields.io/badge/Download-Windows%20installer-2563eb?style=for-the-badge&logo=windows)](https://github.com/monaghanhc/Video-Chat/releases/latest/download/DeskCall-Setup-0.1.0-beta.1.exe)
+[![Open DeskCall web app](https://img.shields.io/badge/Open-Web%20app-111827?style=for-the-badge&logo=googlechrome)](https://monaghanhc.github.io/Video-Chat/)
+
 ## Monorepo layout
 
 ```text
@@ -70,16 +73,21 @@ npm run build:web
 npm run preview:web
 ```
 
-Deploy the contents of `apps/desktop/dist/` to any HTTPS-capable static host such as Netlify, Vercel,
-Cloudflare Pages, Render static sites, or a VPS behind TLS. The web build includes:
+Every push to `main` deploys the web app to:
+
+```text
+https://monaghanhc.github.io/Video-Chat/
+```
+
+The web build includes:
 
 - `manifest.webmanifest`
 - install icons
 - a service worker app shell
 - an in-app `Install app` affordance where the browser exposes install prompts
 
-For real deployments, set `VITE_SIGNALING_SERVER_URL` to the public signaling server URL before the
-web build so visitors land on a usable server immediately.
+For real deployments, set the GitHub Actions repository variable `VITE_SIGNALING_SERVER_URL` to the
+public signaling server URL so visitors land on a usable server immediately.
 
 ## Test a call between two computers
 
