@@ -22,6 +22,7 @@ import { VideoSurface } from './components/VideoSurface';
 import { useDeskCall } from './hooks/useDeskCall';
 import { useMediaDevices } from './hooks/useMediaDevices';
 import { formatTime } from './lib/utils';
+import { getPreferredMediaConstraints, videoQualityProfiles } from './lib/webrtc';
 
 type Screen = 'welcome' | 'precall' | 'call';
 
@@ -119,13 +120,20 @@ export function App() {
 
     try {
       localStream?.getTracks().forEach((track) => track.stop());
+      const preferredConstraints = getPreferredMediaConstraints();
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: settings.preferredMicrophoneId
-          ? { deviceId: { exact: settings.preferredMicrophoneId } }
-          : true,
+          ? {
+              ...(typeof preferredConstraints.audio === 'object' ? preferredConstraints.audio : {}),
+              deviceId: { exact: settings.preferredMicrophoneId }
+            }
+          : preferredConstraints.audio,
         video: settings.preferredCameraId
-          ? { deviceId: { exact: settings.preferredCameraId } }
-          : true
+          ? {
+              ...(typeof preferredConstraints.video === 'object' ? preferredConstraints.video : {}),
+              deviceId: { exact: settings.preferredCameraId }
+            }
+          : preferredConstraints.video
       });
 
       setLocalStream(stream);
@@ -424,10 +432,14 @@ export function App() {
                   </Button>
                 </div>
                 <div className="grid gap-3">
-                  <Button onClick={createRoom} disabled={!localStream}>
+                  <Button onClick={createRoom} disabled={!localStream || !call.signalingConnected}>
                     Create room
                   </Button>
-                  <Button variant="outline" onClick={joinRoom} disabled={!localStream || !joinCode}>
+                  <Button
+                    variant="outline"
+                    onClick={joinRoom}
+                    disabled={!localStream || !joinCode || !call.signalingConnected}
+                  >
                     Join {joinCode || 'room'}
                   </Button>
                 </div>
@@ -440,7 +452,7 @@ export function App() {
           <section className="grid flex-1 gap-6 xl:grid-cols-[1fr_24rem]">
             <div className="grid gap-6">
               <Card className="grid gap-4 p-4">
-                <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
+                <div className="relative grid gap-4 lg:grid-cols-[1fr_18rem]">
                   <div ref={remoteVideoWrapperRef}>
                     <VideoSurface
                       stream={call.remoteStream}
@@ -450,12 +462,14 @@ export function App() {
                       sinkId={settings.preferredSpeakerId}
                     />
                   </div>
-                  <VideoSurface
-                    stream={localStream}
-                    muted
-                    label={isCameraEnabled ? 'You' : 'Camera off'}
-                    className="h-[32rem]"
-                  />
+                  <div className="absolute right-4 top-4 z-10 w-32 sm:w-40 lg:static lg:w-auto">
+                    <VideoSurface
+                      stream={localStream}
+                      muted
+                      label={isCameraEnabled ? 'You' : 'Camera off'}
+                      className="h-44 border border-white/10 shadow-2xl lg:h-[32rem]"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -467,6 +481,7 @@ export function App() {
                     {call.isScreenSharing ? (
                       <Badge className="text-blue-200">Sharing screen</Badge>
                     ) : null}
+                    <Badge>{videoQualityProfiles[call.qualityTier].label}</Badge>
                   </div>
                   {call.roomId ? (
                     <Button
@@ -492,6 +507,7 @@ export function App() {
                     ) : null}
                   </div>
                 ) : null}
+                <div className="text-sm text-zinc-400">{call.networkSummary}</div>
                 <div className="flex flex-wrap gap-3">
                   <Button variant={isMicEnabled ? 'secondary' : 'danger'} onClick={toggleMic}>
                     {isMicEnabled ? <Mic /> : <MicOff />}

@@ -20,6 +20,71 @@ export function getIceServers(): RTCIceServer[] {
   return servers;
 }
 
+export function hasTurnServer(): boolean {
+  return Boolean(
+    import.meta.env.VITE_TURN_URLS?.trim() &&
+      import.meta.env.VITE_TURN_USERNAME?.trim() &&
+      import.meta.env.VITE_TURN_CREDENTIAL?.trim()
+  );
+}
+
+export type VideoQualityTier = 'high' | 'balanced' | 'low' | 'survival';
+
+export const videoQualityProfiles: Record<
+  VideoQualityTier,
+  {
+    label: string;
+    maxBitrate: number;
+    scaleResolutionDownBy: number;
+  }
+> = {
+  high: {
+    label: 'HD',
+    maxBitrate: 1_500_000,
+    scaleResolutionDownBy: 1
+  },
+  balanced: {
+    label: 'Balanced',
+    maxBitrate: 900_000,
+    scaleResolutionDownBy: 1.5
+  },
+  low: {
+    label: 'Low data',
+    maxBitrate: 450_000,
+    scaleResolutionDownBy: 2
+  },
+  survival: {
+    label: 'Recovery',
+    maxBitrate: 220_000,
+    scaleResolutionDownBy: 3
+  }
+};
+
+export function getPreferredMediaConstraints(): MediaStreamConstraints {
+  const compactViewport = window.innerWidth < 768;
+
+  return {
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    },
+    video: compactViewport
+      ? {
+          width: { ideal: 640 },
+          height: { ideal: 360 },
+          frameRate: { ideal: 24, max: 30 },
+          facingMode: 'user'
+        }
+      : {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 },
+          facingMode: 'user'
+        }
+  };
+}
+
 export async function playIncomingCallTone(): Promise<void> {
   const AudioContextClass = window.AudioContext;
   const context = new AudioContextClass();

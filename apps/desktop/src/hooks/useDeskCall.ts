@@ -9,10 +9,17 @@ import {
   type RoomId,
   type ServerToClientEvents
 } from '@deskcall/shared';
-import { getIceServers, playIncomingCallTone } from '../lib/webrtc';
+import {
+  getIceServers,
+  hasTurnServer,
+  playIncomingCallTone,
+  type VideoQualityTier,
+  videoQualityProfiles
+} from '../lib/webrtc';
 
 type DeskCallSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 type Role = 'creator' | 'joiner' | null;
+const qualityOrder: VideoQualityTier[] = ['survival', 'low', 'balanced', 'high'];
 
 interface UseDeskCallOptions {
   signalingServerUrl: string;
@@ -29,6 +36,8 @@ interface UseDeskCallResult {
   messages: ChatMessage[];
   dataChannelReady: boolean;
   isScreenSharing: boolean;
+  qualityTier: VideoQualityTier;
+  networkSummary: string;
   createRoom: () => void;
   joinRoom: (roomId: string) => void;
   leaveRoom: () => void;
@@ -52,6 +61,10 @@ export function useDeskCall({
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   const reconnectAttemptedRef = useRef(false);
+  const connectionTimeoutRef = useRef<number | null>(null);
+  const statsIntervalRef = useRef<number | null>(null);
+  const healthySamplesRef = useRef(0);
+  const currentQualityTierRef = useRef<VideoQualityTier>('balanced');
 
   const [roomId, setRoomId] = useState<RoomId | null>(null);
   const [participants, setParticipants] = useState<ParticipantPresence[]>([]);
@@ -62,6 +75,8 @@ export function useDeskCall({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [dataChannelReady, setDataChannelReady] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [qualityTier, setQualityTier] = useState<VideoQualityTier>('balanced');
+  const [networkSummary, setNetworkSummary] = useState('Waiting for media path');
 
   useEffect(() => {
     localStreamRef.current = localStream;
@@ -111,9 +126,143 @@ export function useDeskCall({
     peerConnectionRef.current?.close();
     peerConnectionRef.current = null;
     pendingIceCandidatesRef.current = [];
+    if (connectionTimeoutRef.current) {
+      window.clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
+    if (statsIntervalRef.current) {
+      window.clearInterval(statsIntervalRef.current);
+      statsIntervalRef.current = null;
+    }
     setDataChannelReady(false);
     setRemoteStream(null);
     reconnectAttemptedRef.current = false;
+    healthySamplesRef.current = 0;
+    currentQualityTierRef.current = 'balanced';
+    setQualityTier('balanced');
+    setNetworkSummary('Waiting for media path');
+  }, []);
+
+  const applyVideoQualityTier = useCallback(async (tier: VideoQualityTier) => {
+    const peerConnection = peerConnectionRef.current;
+    const sender = peerConnection?.getSenders().find((candidate) => candidate.track?.kind === 'video');
+
+    if (!sender) {
+      return;
+    }
+
+    try {
+      const parameters = sender.getParameters();
+      if (parameters.encodings.length === 0) {
+        parameters.encodings = [{}];
+      }
+
+      parameters.encodings = parameters.encodings.map((encoding) => ({
+        ...encoding,
+        maxBitrate: videoQualityProfiles[tier].maxBitrate,
+        scaleResolutionDownBy: videoQualityProfiles[tier].scaleResolutionDownBy
+      }));
+
+      await sender.setParameters(parameters);
+      currentQualityTierRef.current = tier;
+      setQualityTier(tier);
+    } catch {
+      // Some browsers expose only a subset of sender controls. Let codec adaptation continue.
+    }
+  }, []);
+
+  const startStatsMonitor = useCallback(() => {
+    if (statsIntervalRef.current) {
+      window.clearInterval(statsIntervalRef.current);
+    }
+
+    statsIntervalRef.current = window.setInterval(() => {
+      const peerConnection = peerConnectionRef.current;
+      if (!peerConnection || peerConnection.connectionState !== 'connected') {
+        return;
+      }
+
+      void peerConnection.getStats().then(async (stats) => {
+        let availableOutgoingBitrate: number | undefined;
+        let roundTripTime: number | undefined;
+
+        stats.forEach((report) => {
+          if (
+            report.type === 'candidate-pair' &&
+            report.state === 'succeeded' &&
+            report.nominated
+          ) {
+            availableOutgoingBitrate = report.availableOutgoingBitrate as number | undefined;
+          }
+
+          if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
+            roundTripTime = report.roundTripTime as number | undefined;
+          }
+        });
+
+        const currentIndex = qualityOrder.indexOf(currentQualityTierRef.current);
+        let targetTier: VideoQualityTier = 'high';
+
+        if (
+          (availableOutgoingBitrate !== undefined && availableOutgoingBitrate < 300_000) ||
+          (roundTripTime !== undefined && roundTripTime > 0.65)
+        ) {
+          targetTier = 'survival';
+        } else if (
+          (availableOutgoingBitrate !== undefined && availableOutgoingBitrate < 650_000) ||
+          (roundTripTime !== undefined && roundTripTime > 0.4)
+        ) {
+          targetTier = 'low';
+        } else if (
+          (availableOutgoingBitrate !== undefined && availableOutgoingBitrate < 1_100_000) ||
+          (roundTripTime !== undefined && roundTripTime > 0.25)
+        ) {
+          targetTier = 'balanced';
+        }
+
+        const targetIndex = qualityOrder.indexOf(targetTier);
+
+        if (targetIndex < currentIndex) {
+          healthySamplesRef.current = 0;
+          await applyVideoQualityTier(targetTier);
+        } else if (targetIndex > currentIndex) {
+          healthySamplesRef.current += 1;
+          if (healthySamplesRef.current >= 3) {
+            healthySamplesRef.current = 0;
+            await applyVideoQualityTier(qualityOrder[Math.min(currentIndex + 1, qualityOrder.length - 1)]!);
+          }
+        } else {
+          healthySamplesRef.current = 0;
+        }
+
+        const bitrateLabel =
+          availableOutgoingBitrate === undefined
+            ? 'estimating bitrate'
+            : `${Math.round(availableOutgoingBitrate / 1000)} kbps`;
+        const rttLabel =
+          roundTripTime === undefined ? 'RTT pending' : `${Math.round(roundTripTime * 1000)} ms RTT`;
+        setNetworkSummary(`${videoQualityProfiles[currentQualityTierRef.current].label} · ${bitrateLabel} · ${rttLabel}`);
+      });
+    }, 4000);
+  }, [applyVideoQualityTier]);
+
+  const armConnectionTimeout = useCallback(() => {
+    if (connectionTimeoutRef.current) {
+      window.clearTimeout(connectionTimeoutRef.current);
+    }
+
+    connectionTimeoutRef.current = window.setTimeout(() => {
+      if (peerConnectionRef.current?.connectionState === 'connected') {
+        return;
+      }
+
+      setStatus('failed');
+      setError(
+        hasTurnServer()
+          ? 'DeskCall could not establish the media path. Retry the call.'
+          : 'DeskCall could not establish a direct media path. This network likely needs TURN relay support.'
+      );
+    }, 18_000);
   }, []);
 
   const createPeerConnection = useCallback(
@@ -153,9 +302,15 @@ export function useDeskCall({
             setStatus('connecting');
             break;
           case 'connected':
+            if (connectionTimeoutRef.current) {
+              window.clearTimeout(connectionTimeoutRef.current);
+              connectionTimeoutRef.current = null;
+            }
             reconnectAttemptedRef.current = false;
             setError(null);
             setStatus('connected');
+            void applyVideoQualityTier(currentQualityTierRef.current);
+            startStatsMonitor();
             break;
           case 'disconnected':
             setStatus('disconnected');
@@ -191,7 +346,7 @@ export function useDeskCall({
       peerConnectionRef.current = peerConnection;
       return peerConnection;
     },
-    [closePeerConnection, setupDataChannel]
+    [applyVideoQualityTier, closePeerConnection, setupDataChannel, startStatsMonitor]
   );
 
   const sendOffer = useCallback(async () => {
@@ -207,10 +362,11 @@ export function useDeskCall({
       description: offer
     });
     setStatus('connecting');
-  }, [createPeerConnection]);
+    armConnectionTimeout();
+  }, [armConnectionTimeout, createPeerConnection]);
 
   const retryConnection = useCallback(async () => {
-    if (!roomIdRef.current || roleRef.current !== 'creator') {
+    if (!roomIdRef.current) {
       return;
     }
 
@@ -318,6 +474,7 @@ export function useDeskCall({
         await flushPendingIceCandidates();
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
+        armConnectionTimeout();
 
         if (roomIdRef.current) {
           socket.emit('signal:answer', {
@@ -361,7 +518,14 @@ export function useDeskCall({
       socketRef.current = null;
       closePeerConnection();
     };
-  }, [closePeerConnection, createPeerConnection, flushPendingIceCandidates, sendOffer, signalingServerUrl]);
+  }, [
+    armConnectionTimeout,
+    closePeerConnection,
+    createPeerConnection,
+    flushPendingIceCandidates,
+    sendOffer,
+    signalingServerUrl
+  ]);
 
   const createRoom = useCallback(() => {
     setError(null);
@@ -456,6 +620,8 @@ export function useDeskCall({
     messages,
     dataChannelReady,
     isScreenSharing,
+    qualityTier,
+    networkSummary,
     createRoom,
     joinRoom,
     leaveRoom,
@@ -465,4 +631,3 @@ export function useDeskCall({
     stopScreenShare
   };
 }
-
