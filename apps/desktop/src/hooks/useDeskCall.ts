@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import {
   type ChatMessagePayload,
@@ -11,6 +11,11 @@ import {
   type ServerToClientEvents
 } from '@deskcall/shared';
 import {
+  deriveConnectionStatus,
+  participantLeftMessage,
+  shouldUseDataChannel
+} from '../lib/callState';
+import {
   getIceServers,
   hasTurnServer,
   playIncomingCallTone,
@@ -20,6 +25,8 @@ import {
 
 type DeskCallSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 type Role = 'creator' | 'joiner' | null;
+type RemoteStreams = Record<string, MediaStream>;
+type RemoteParticipant = { id: string; stream: MediaStream | null };
 const qualityOrder: VideoQualityTier[] = ['survival', 'low', 'balanced', 'high'];
 
 interface UseDeskCallOptions {
@@ -29,8 +36,9 @@ interface UseDeskCallOptions {
 
 interface UseDeskCallResult {
   roomId: RoomId | null;
+  selfId: string | null;
   participants: ParticipantPresence[];
-  remoteStream: MediaStream | null;
+  remoteParticipants: RemoteParticipant[];
   status: ConnectionStatus;
   signalingConnected: boolean;
   error: string | null;
@@ -53,23 +61,27 @@ export function useDeskCall({
   localStream
 }: UseDeskCallOptions): UseDeskCallResult {
   const socketRef = useRef<DeskCallSocket | null>(null);
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const pendingIceCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
-  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const roleRef = useRef<Role>(null);
   const roomIdRef = useRef<RoomId | null>(null);
+  const selfIdRef = useRef<string | null>(null);
   const localStreamRef = useRef<MediaStream | null>(localStream);
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
-  const reconnectAttemptedRef = useRef(false);
+  const reconnectAttemptedRef = useRef<Set<string>>(new Set());
   const connectionTimeoutRef = useRef<number | null>(null);
   const statsIntervalRef = useRef<number | null>(null);
   const healthySamplesRef = useRef(0);
   const currentQualityTierRef = useRef<VideoQualityTier>('balanced');
+  const useDataChannelRef = useRef(false);
+  const participantsRef = useRef<ParticipantPresence[]>([]);
 
   const [roomId, setRoomId] = useState<RoomId | null>(null);
+  const [selfId, setSelfId] = useState<string | null>(null);
   const [participants, setParticipants] = useState<ParticipantPresence[]>([]);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [remoteStreams, setRemoteStreams] = useState<RemoteStreams>({});
   const [status, setStatus] = useState<ConnectionStatus>('idle');
   const [signalingConnected, setSignalingConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +95,50 @@ export function useDeskCall({
     localStreamRef.current = localStream;
     cameraTrackRef.current = localStream?.getVideoTracks()[0] ?? null;
   }, [localStream]);
+
+  useEffect(() => {
+    participantsRef.current = participants;
+  }, [participants]);
+
+  const remoteParticipants = useMemo<RemoteParticipant[]>(() => {
+    if (!selfId) {
+      return [];
+    }
+
+    return participants
+      .filter((participant) => participant.id !== selfId)
+      .map((participant) => ({
+        id: participant.id,
+        stream: remoteStreams[participant.id] ?? null
+      }));
+  }, [participants, remoteStreams, selfId]);
+
+  const updateCallStatus = useCallback((nextParticipants: ParticipantPresence[]) => {
+    const activeSelfId = selfIdRef.current;
+    if (!activeSelfId) {
+      return;
+    }
+
+    const peerConnections = peerConnectionsRef.current;
+    const connectedCount = [...peerConnections.values()].filter(
+      (peerConnection) => peerConnection.connectionState === 'connected'
+    ).length;
+    const connectingCount = [...peerConnections.values()].filter((peerConnection) =>
+      ['new', 'connecting'].includes(peerConnection.connectionState)
+    ).length;
+
+    const nextStatus = deriveConnectionStatus(
+      nextParticipants,
+      activeSelfId,
+      connectedCount,
+      connectingCount
+    );
+    setStatus(nextStatus);
+
+    if (nextStatus === 'connected') {
+      setError(null);
+    }
+  }, []);
 
   const setupDataChannel = useCallback((channel: RTCDataChannel) => {
     dataChannelRef.current = channel;
@@ -107,26 +163,51 @@ export function useDeskCall({
     };
   }, []);
 
-  const flushPendingIceCandidates = useCallback(async () => {
-    const peerConnection = peerConnectionRef.current;
+  const flushPendingIceCandidates = useCallback(async (peerId: string) => {
+    const peerConnection = peerConnectionsRef.current.get(peerId);
+    const pendingCandidates = pendingIceCandidatesRef.current.get(peerId) ?? [];
 
-    if (!peerConnection?.remoteDescription) {
+    if (!peerConnection?.remoteDescription || pendingCandidates.length === 0) {
       return;
     }
 
-    for (const candidate of pendingIceCandidatesRef.current) {
+    for (const candidate of pendingCandidates) {
       await peerConnection.addIceCandidate(candidate);
     }
 
-    pendingIceCandidatesRef.current = [];
+    pendingIceCandidatesRef.current.delete(peerId);
   }, []);
 
-  const closePeerConnection = useCallback(() => {
+  const closePeerConnection = useCallback((peerId?: string) => {
+    const closeOne = (targetPeerId: string) => {
+      const peerConnection = peerConnectionsRef.current.get(targetPeerId);
+      peerConnection?.close();
+      peerConnectionsRef.current.delete(targetPeerId);
+      pendingIceCandidatesRef.current.delete(targetPeerId);
+      reconnectAttemptedRef.current.delete(targetPeerId);
+      setRemoteStreams((current) => {
+        if (!(targetPeerId in current)) {
+          return current;
+        }
+
+        const { [targetPeerId]: removedStream, ...rest } = current;
+        void removedStream;
+        return rest;
+      });
+    };
+
+    if (peerId) {
+      closeOne(peerId);
+      return;
+    }
+
     dataChannelRef.current?.close();
     dataChannelRef.current = null;
-    peerConnectionRef.current?.close();
-    peerConnectionRef.current = null;
-    pendingIceCandidatesRef.current = [];
+    for (const targetPeerId of [...peerConnectionsRef.current.keys()]) {
+      closeOne(targetPeerId);
+    }
+    pendingIceCandidatesRef.current.clear();
+    reconnectAttemptedRef.current.clear();
     if (connectionTimeoutRef.current) {
       window.clearTimeout(connectionTimeoutRef.current);
       connectionTimeoutRef.current = null;
@@ -136,8 +217,6 @@ export function useDeskCall({
       statsIntervalRef.current = null;
     }
     setDataChannelReady(false);
-    setRemoteStream(null);
-    reconnectAttemptedRef.current = false;
     healthySamplesRef.current = 0;
     currentQualityTierRef.current = 'balanced';
     setQualityTier('balanced');
@@ -145,30 +224,40 @@ export function useDeskCall({
   }, []);
 
   const applyVideoQualityTier = useCallback(async (tier: VideoQualityTier) => {
-    const peerConnection = peerConnectionRef.current;
-    const sender = peerConnection?.getSenders().find((candidate) => candidate.track?.kind === 'video');
+    const peerConnections = peerConnectionsRef.current;
+    let applied = false;
 
-    if (!sender) {
-      return;
-    }
+    for (const peerConnection of peerConnections.values()) {
+      const sender = peerConnection
+        .getSenders()
+        .find((candidate) => candidate.track?.kind === 'video');
 
-    try {
-      const parameters = sender.getParameters();
-      if (parameters.encodings.length === 0) {
-        parameters.encodings = [{}];
+      if (!sender) {
+        continue;
       }
 
-      parameters.encodings = parameters.encodings.map((encoding) => ({
-        ...encoding,
-        maxBitrate: videoQualityProfiles[tier].maxBitrate,
-        scaleResolutionDownBy: videoQualityProfiles[tier].scaleResolutionDownBy
-      }));
+      try {
+        const parameters = sender.getParameters();
+        if (parameters.encodings.length === 0) {
+          parameters.encodings = [{}];
+        }
 
-      await sender.setParameters(parameters);
+        parameters.encodings = parameters.encodings.map((encoding) => ({
+          ...encoding,
+          maxBitrate: videoQualityProfiles[tier].maxBitrate,
+          scaleResolutionDownBy: videoQualityProfiles[tier].scaleResolutionDownBy
+        }));
+
+        await sender.setParameters(parameters);
+        applied = true;
+      } catch {
+        // Some browsers expose only a subset of sender controls.
+      }
+    }
+
+    if (applied) {
       currentQualityTierRef.current = tier;
       setQualityTier(tier);
-    } catch {
-      // Some browsers expose only a subset of sender controls. Let codec adaptation continue.
     }
   }, []);
 
@@ -178,12 +267,16 @@ export function useDeskCall({
     }
 
     statsIntervalRef.current = window.setInterval(() => {
-      const peerConnection = peerConnectionRef.current;
-      if (!peerConnection || peerConnection.connectionState !== 'connected') {
+      const peerConnections = [...peerConnectionsRef.current.values()];
+      const connectedPeer = peerConnections.find(
+        (peerConnection) => peerConnection.connectionState === 'connected'
+      );
+
+      if (!connectedPeer) {
         return;
       }
 
-      void peerConnection.getStats().then(async (stats) => {
+      void connectedPeer.getStats().then(async (stats) => {
         let availableOutgoingBitrate: number | undefined;
         let roundTripTime: number | undefined;
 
@@ -242,7 +335,12 @@ export function useDeskCall({
             : `${Math.round(availableOutgoingBitrate / 1000)} kbps`;
         const rttLabel =
           roundTripTime === undefined ? 'RTT pending' : `${Math.round(roundTripTime * 1000)} ms RTT`;
-        setNetworkSummary(`${videoQualityProfiles[currentQualityTierRef.current].label} · ${bitrateLabel} · ${rttLabel}`);
+        const connectedCount = peerConnections.filter(
+          (peerConnection) => peerConnection.connectionState === 'connected'
+        ).length;
+        setNetworkSummary(
+          `${videoQualityProfiles[currentQualityTierRef.current].label} · ${connectedCount}/${peerConnections.length} links · ${bitrateLabel} · ${rttLabel}`
+        );
       });
     }, 4000);
   }, [applyVideoQualityTier]);
@@ -253,22 +351,34 @@ export function useDeskCall({
     }
 
     connectionTimeoutRef.current = window.setTimeout(() => {
-      if (peerConnectionRef.current?.connectionState === 'connected') {
+      const activeSelfId = selfIdRef.current;
+      if (!activeSelfId) {
+        return;
+      }
+
+      const expectedPeerCount = participantsRef.current.filter(
+        (participant) => participant.id !== activeSelfId
+      ).length;
+      const connectedCount = [...peerConnectionsRef.current.values()].filter(
+        (peerConnection) => peerConnection.connectionState === 'connected'
+      ).length;
+
+      if (expectedPeerCount === 0 || connectedCount >= expectedPeerCount) {
         return;
       }
 
       setStatus('failed');
       setError(
         hasTurnServer()
-          ? 'DeskCall could not establish the media path. Retry the call.'
-          : 'DeskCall could not establish a direct media path. This network likely needs TURN relay support.'
+          ? 'DeskCall could not connect to every participant. Retry the call.'
+          : 'DeskCall could not establish media paths to every participant. This network likely needs TURN relay support.'
       );
     }, 18_000);
   }, []);
 
   const createPeerConnection = useCallback(
-    (initiator: boolean): RTCPeerConnection => {
-      closePeerConnection();
+    (peerId: string, initiator: boolean): RTCPeerConnection => {
+      closePeerConnection(peerId);
 
       const peerConnection = new RTCPeerConnection({
         iceServers: getIceServers()
@@ -285,44 +395,46 @@ export function useDeskCall({
 
         socketRef.current?.emit('signal:ice-candidate', {
           roomId: roomIdRef.current,
+          targetId: peerId,
           candidate: event.candidate.toJSON()
         });
       };
 
       peerConnection.ontrack = (event) => {
         const [stream] = event.streams;
-        if (stream) {
-          setRemoteStream(stream);
+        if (!stream) {
+          return;
         }
+
+        setRemoteStreams((current) => ({
+          ...current,
+          [peerId]: stream
+        }));
       };
 
       peerConnection.onconnectionstatechange = () => {
+        updateCallStatus(participantsRef.current);
+
         switch (peerConnection.connectionState) {
-          case 'new':
-          case 'connecting':
-            setStatus('connecting');
-            break;
           case 'connected':
             if (connectionTimeoutRef.current) {
               window.clearTimeout(connectionTimeoutRef.current);
               connectionTimeoutRef.current = null;
             }
-            reconnectAttemptedRef.current = false;
             setError(null);
-            setStatus('connected');
             void applyVideoQualityTier(currentQualityTierRef.current);
             startStatsMonitor();
             break;
           case 'disconnected':
             setStatus('disconnected');
-            setError('The peer connection was interrupted. DeskCall is trying to recover.');
+            setError('A participant connection dropped. DeskCall is trying to recover.');
             break;
           case 'failed':
             setStatus('failed');
-            setError('The peer connection failed. A retry may be needed.');
+            setError('A participant connection failed. Retry if media does not return.');
             break;
           case 'closed':
-            setStatus('disconnected');
+            updateCallStatus(participantsRef.current);
             break;
         }
       };
@@ -331,49 +443,73 @@ export function useDeskCall({
         if (
           peerConnection.iceConnectionState === 'failed' &&
           initiator &&
-          !reconnectAttemptedRef.current
+          !reconnectAttemptedRef.current.has(peerId)
         ) {
-          reconnectAttemptedRef.current = true;
+          reconnectAttemptedRef.current.add(peerId);
           peerConnection.restartIce();
         }
       };
 
-      if (initiator) {
-        setupDataChannel(peerConnection.createDataChannel('deskcall-chat'));
-      } else {
-        peerConnection.ondatachannel = (event) => setupDataChannel(event.channel);
+      if (useDataChannelRef.current) {
+        if (initiator) {
+          setupDataChannel(peerConnection.createDataChannel('deskcall-chat'));
+        } else {
+          peerConnection.ondatachannel = (event) => setupDataChannel(event.channel);
+        }
       }
 
-      peerConnectionRef.current = peerConnection;
+      peerConnectionsRef.current.set(peerId, peerConnection);
       return peerConnection;
     },
-    [applyVideoQualityTier, closePeerConnection, setupDataChannel, startStatsMonitor]
+    [applyVideoQualityTier, closePeerConnection, setupDataChannel, startStatsMonitor, updateCallStatus]
   );
 
-  const sendOffer = useCallback(async () => {
-    if (!roomIdRef.current) {
+  const sendOffer = useCallback(
+    async (targetId: string) => {
+      if (!roomIdRef.current || targetId === selfIdRef.current) {
+        return;
+      }
+
+      const peerConnection = createPeerConnection(targetId, true);
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socketRef.current?.emit('signal:offer', {
+        roomId: roomIdRef.current,
+        targetId,
+        description: offer
+      });
+      setStatus('connecting');
+      armConnectionTimeout();
+    },
+    [armConnectionTimeout, createPeerConnection]
+  );
+
+  const syncDataChannelMode = useCallback((nextParticipants: ParticipantPresence[]) => {
+    const enableDataChannel = shouldUseDataChannel(nextParticipants.length);
+    if (enableDataChannel === useDataChannelRef.current) {
       return;
     }
 
-    const peerConnection = createPeerConnection(true);
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socketRef.current?.emit('signal:offer', {
-      roomId: roomIdRef.current,
-      description: offer
-    });
-    setStatus('connecting');
-    armConnectionTimeout();
-  }, [armConnectionTimeout, createPeerConnection]);
+    useDataChannelRef.current = enableDataChannel;
+    if (!enableDataChannel) {
+      dataChannelRef.current?.close();
+      dataChannelRef.current = null;
+      setDataChannelReady(false);
+    }
+  }, []);
 
   const retryConnection = useCallback(async () => {
-    if (!roomIdRef.current) {
+    if (!roomIdRef.current || !selfIdRef.current) {
       return;
     }
 
     setError(null);
-    await sendOffer();
-  }, [sendOffer]);
+    const peerIds = participants
+      .map((participant) => participant.id)
+      .filter((participantId) => participantId !== selfIdRef.current);
+
+    await Promise.all(peerIds.map((peerId) => sendOffer(peerId)));
+  }, [participants, sendOffer]);
 
   const leaveRoom = useCallback(() => {
     if (roomIdRef.current) {
@@ -383,6 +519,7 @@ export function useDeskCall({
     closePeerConnection();
     roleRef.current = null;
     roomIdRef.current = null;
+    useDataChannelRef.current = false;
     setRoomId(null);
     setParticipants([]);
     setMessages([]);
@@ -402,10 +539,15 @@ export function useDeskCall({
     socketRef.current = socket;
 
     socket.on('connect', () => {
+      const connectedId = socket.id ?? null;
+      selfIdRef.current = connectedId;
+      setSelfId(connectedId);
       setSignalingConnected(true);
       setError(null);
 
       if (roomIdRef.current) {
+        closePeerConnection();
+        setStatus('connecting');
         socket.emit('room:join', { roomId: roomIdRef.current });
       }
     });
@@ -428,6 +570,7 @@ export function useDeskCall({
       roomIdRef.current = payload.roomId;
       setRoomId(payload.roomId);
       setParticipants(payload.participants);
+      syncDataChannelMode(payload.participants);
       setStatus('waiting');
     });
 
@@ -439,7 +582,8 @@ export function useDeskCall({
       roomIdRef.current = payload.roomId;
       setRoomId(payload.roomId);
       setParticipants(payload.participants);
-      setStatus(payload.participants.length > 1 ? 'connecting' : 'waiting');
+      syncDataChannelMode(payload.participants);
+      updateCallStatus(payload.participants);
     });
 
     socket.on('room:error', (payload: RoomErrorPayload) => {
@@ -455,24 +599,40 @@ export function useDeskCall({
 
     socket.on('room:participant-joined', (payload) => {
       setParticipants(payload.participants);
-      setStatus('connecting');
+      syncDataChannelMode(payload.participants);
+      updateCallStatus(payload.participants);
       void playIncomingCallTone().catch(() => undefined);
-      void sendOffer();
+
+      if (payload.participant.id !== selfIdRef.current) {
+        void sendOffer(payload.participant.id);
+      }
     });
 
     socket.on('room:participant-left', (payload) => {
       setParticipants(payload.participants);
-      closePeerConnection();
-      setStatus('waiting');
-      setError('The other participant left the room.');
+      syncDataChannelMode(payload.participants);
+      closePeerConnection(payload.participantId);
+      updateCallStatus(payload.participants);
+
+      const leftMessage = participantLeftMessage(payload.participants.length);
+      if (leftMessage) {
+        setError(leftMessage);
+        setStatus('waiting');
+      } else {
+        setError(null);
+      }
     });
 
-    socket.on('signal:offer', async ({ description }) => {
+    socket.on('signal:offer', async ({ fromId, targetId, description }) => {
+      if (!fromId || (targetId && targetId !== selfIdRef.current)) {
+        return;
+      }
+
       try {
         void playIncomingCallTone().catch(() => undefined);
-        const peerConnection = createPeerConnection(false);
+        const peerConnection = createPeerConnection(fromId, false);
         await peerConnection.setRemoteDescription(description);
-        await flushPendingIceCandidates();
+        await flushPendingIceCandidates(fromId);
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
         armConnectionTimeout();
@@ -480,30 +640,42 @@ export function useDeskCall({
         if (roomIdRef.current) {
           socket.emit('signal:answer', {
             roomId: roomIdRef.current,
+            targetId: fromId,
             description: answer
           });
         }
       } catch {
         setStatus('failed');
-        setError('Could not answer the incoming call.');
+        setError('Could not answer an incoming media offer.');
       }
     });
 
-    socket.on('signal:answer', async ({ description }) => {
+    socket.on('signal:answer', async ({ fromId, targetId, description }) => {
+      if (!fromId || (targetId && targetId !== selfIdRef.current)) {
+        return;
+      }
+
       try {
-        await peerConnectionRef.current?.setRemoteDescription(description);
-        await flushPendingIceCandidates();
+        const peerConnection = peerConnectionsRef.current.get(fromId);
+        await peerConnection?.setRemoteDescription(description);
+        await flushPendingIceCandidates(fromId);
       } catch {
         setStatus('failed');
-        setError('Could not finish the WebRTC handshake.');
+        setError('Could not finish a WebRTC handshake.');
       }
     });
 
-    socket.on('signal:ice-candidate', async ({ candidate }) => {
-      const peerConnection = peerConnectionRef.current;
+    socket.on('signal:ice-candidate', async ({ fromId, targetId, candidate }) => {
+      if (!fromId || (targetId && targetId !== selfIdRef.current)) {
+        return;
+      }
+
+      const peerConnection = peerConnectionsRef.current.get(fromId);
 
       if (!peerConnection?.remoteDescription) {
-        pendingIceCandidatesRef.current.push(candidate);
+        const pending = pendingIceCandidatesRef.current.get(fromId) ?? [];
+        pending.push(candidate);
+        pendingIceCandidatesRef.current.set(fromId, pending);
         return;
       }
 
@@ -515,7 +687,7 @@ export function useDeskCall({
     });
 
     socket.on('chat:message', (payload: ChatMessagePayload) => {
-      if (payload.roomId !== roomIdRef.current) {
+      if (payload.roomId !== roomIdRef.current || payload.senderId === selfIdRef.current) {
         return;
       }
 
@@ -524,6 +696,7 @@ export function useDeskCall({
         {
           id: payload.id,
           author: 'peer',
+          senderId: payload.senderId,
           body: payload.body,
           sentAt: payload.sentAt
         }
@@ -541,7 +714,9 @@ export function useDeskCall({
     createPeerConnection,
     flushPendingIceCandidates,
     sendOffer,
-    signalingServerUrl
+    signalingServerUrl,
+    syncDataChannelMode,
+    updateCallStatus
   ]);
 
   const createRoom = useCallback(() => {
@@ -566,7 +741,7 @@ export function useDeskCall({
     const sentAt = Date.now();
     const dataChannel = dataChannelRef.current;
 
-    if (dataChannel?.readyState === 'open') {
+    if (useDataChannelRef.current && dataChannel?.readyState === 'open') {
       dataChannel.send(JSON.stringify({ body: trimmedBody, sentAt }));
     } else {
       socketRef.current?.emit('chat:message', {
@@ -589,25 +764,26 @@ export function useDeskCall({
   }, []);
 
   const stopScreenShare = useCallback(async () => {
-    const peerConnection = peerConnectionRef.current;
     const cameraTrack = cameraTrackRef.current;
-    const sender = peerConnection?.getSenders().find((candidate) => candidate.track?.kind === 'video');
 
     screenTrackRef.current?.stop();
     screenTrackRef.current = null;
 
-    if (sender && cameraTrack) {
-      await sender.replaceTrack(cameraTrack);
+    for (const peerConnection of peerConnectionsRef.current.values()) {
+      const sender = peerConnection
+        .getSenders()
+        .find((candidate) => candidate.track?.kind === 'video');
+
+      if (sender && cameraTrack) {
+        await sender.replaceTrack(cameraTrack);
+      }
     }
 
     setIsScreenSharing(false);
   }, []);
 
   const startScreenShare = useCallback(async () => {
-    const peerConnection = peerConnectionRef.current;
-    const sender = peerConnection?.getSenders().find((candidate) => candidate.track?.kind === 'video');
-
-    if (!sender) {
+    if (peerConnectionsRef.current.size === 0) {
       setError('Start a call before sharing your screen.');
       return;
     }
@@ -628,7 +804,16 @@ export function useDeskCall({
         void stopScreenShare();
       };
 
-      await sender.replaceTrack(screenTrack);
+      for (const peerConnection of peerConnectionsRef.current.values()) {
+        const sender = peerConnection
+          .getSenders()
+          .find((candidate) => candidate.track?.kind === 'video');
+
+        if (sender) {
+          await sender.replaceTrack(screenTrack);
+        }
+      }
+
       setIsScreenSharing(true);
     } catch {
       setError('Screen sharing was cancelled or unavailable.');
@@ -643,8 +828,9 @@ export function useDeskCall({
 
   return {
     roomId,
+    selfId,
     participants,
-    remoteStream,
+    remoteParticipants,
     status,
     signalingConnected,
     error,

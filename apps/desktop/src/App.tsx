@@ -1,8 +1,7 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useState } from 'react';
 import {
   Camera,
   CameraOff,
-  Copy,
   Download,
   Mic,
   MicOff,
@@ -13,13 +12,18 @@ import {
   Settings2,
   Users
 } from 'lucide-react';
-import type { AppSettings, ConnectionStatus } from '@deskcall/shared';
+import { MAX_ROOM_PARTICIPANTS, type AppSettings, type ConnectionStatus } from '@deskcall/shared';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
 import { Input } from './components/ui/input';
+import { InviteCodeInput } from './components/InviteCodeInput';
+import { InviteCodeShare } from './components/InviteCodeShare';
 import { VideoSurface } from './components/VideoSurface';
 import { useDeskCall } from './hooks/useDeskCall';
+import { isValidInviteCode } from './lib/inviteCode';
+import { shortParticipantLabel } from './lib/participants';
+import { normalizePersistedSettings } from './lib/settings';
 import { useMediaDevices } from './hooks/useMediaDevices';
 import { formatTime } from './lib/utils';
 import { getPreferredMediaConstraints, videoQualityProfiles } from './lib/webrtc';
@@ -31,31 +35,16 @@ const defaultSettings: AppSettings = {
     import.meta.env.VITE_SIGNALING_SERVER_URL ?? 'https://deskcall-signaling.onrender.com'
 };
 
-const localSignalingUrls = new Set(['http://localhost:4000', 'http://127.0.0.1:4000']);
-
-function normalizePersistedSettings(storedSettings: Partial<AppSettings>): AppSettings {
-  const mergedSettings = {
-    ...defaultSettings,
-    ...storedSettings
-  };
-
-  const isProductionWebHost =
-    window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
-
-  if (isProductionWebHost && localSignalingUrls.has(mergedSettings.signalingServerUrl)) {
-    return {
-      ...mergedSettings,
-      signalingServerUrl: defaultSettings.signalingServerUrl
-    };
-  }
-
-  return mergedSettings;
-}
-
 const browserSettingsBridge = {
   async getSettings(): Promise<AppSettings> {
     const raw = window.localStorage.getItem('deskcall:settings');
-    return raw ? normalizePersistedSettings(JSON.parse(raw) as Partial<AppSettings>) : defaultSettings;
+    return raw
+      ? normalizePersistedSettings(
+          JSON.parse(raw) as Partial<AppSettings>,
+          defaultSettings,
+          window.location.hostname
+        )
+      : defaultSettings;
   },
   async setSettings(nextSettings: AppSettings): Promise<AppSettings> {
     window.localStorage.setItem('deskcall:settings', JSON.stringify(nextSettings));
@@ -69,7 +58,7 @@ const WINDOWS_INSTALLER_URL =
 
 const statusCopy: Record<ConnectionStatus, string> = {
   idle: 'Idle',
-  waiting: 'Waiting for peer',
+  waiting: 'Waiting for people',
   connecting: 'Connecting',
   connected: 'Connected',
   disconnected: 'Disconnected',
@@ -77,11 +66,11 @@ const statusCopy: Record<ConnectionStatus, string> = {
 };
 
 export function App() {
-  const remoteVideoWrapperRef = useRef<HTMLDivElement>(null);
   const [screen, setScreen] = useState<Screen>('welcome');
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [settingsReady, setSettingsReady] = useState(false);
   const [joinCode, setJoinCode] = useState('');
+  const [joinIntent, setJoinIntent] = useState<'create' | 'join' | null>(null);
   const [chatDraft, setChatDraft] = useState('');
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
@@ -102,7 +91,9 @@ export function App() {
 
   useEffect(() => {
     void settingsBridge.getSettings().then((storedSettings) => {
-      setSettings(normalizePersistedSettings(storedSettings));
+      setSettings(
+        normalizePersistedSettings(storedSettings, defaultSettings, window.location.hostname)
+      );
       setSettingsReady(true);
     });
   }, [settingsBridge]);
@@ -199,14 +190,20 @@ export function App() {
   }, [isCameraEnabled, localStream]);
 
   const beginCreateFlow = useCallback(async () => {
+    setJoinIntent('create');
     setScreen('precall');
     await requestMedia();
   }, [requestMedia]);
 
   const beginJoinFlow = useCallback(async () => {
+    if (!isValidInviteCode(joinCode)) {
+      return;
+    }
+
+    setJoinIntent('join');
     setScreen('precall');
     await requestMedia();
-  }, [requestMedia]);
+  }, [joinCode, requestMedia]);
 
   const createRoom = useCallback(() => {
     call.createRoom();
@@ -221,8 +218,11 @@ export function App() {
   const endCall = useCallback(() => {
     call.leaveRoom();
     setScreen('welcome');
+    setJoinIntent(null);
     setChatDraft('');
   }, [call]);
+
+  const canJoinWithCode = isValidInviteCode(joinCode);
 
   const handleSendMessage = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
@@ -233,10 +233,6 @@ export function App() {
     [call, chatDraft]
   );
 
-  const roomCopyLabel = useMemo(
-    () => (call.roomId ? `Invite code ${call.roomId}` : 'No room yet'),
-    [call.roomId]
-  );
   const canChat = Boolean(call.roomId && call.signalingConnected);
 
   const installWebApp = useCallback(async () => {
@@ -388,7 +384,18 @@ export function App() {
                 <Button size="lg" onClick={() => void beginCreateFlow()}>
                   Create room
                 </Button>
-                <Button size="lg" variant="secondary" onClick={() => void beginJoinFlow()}>
+                <Button
+                  size="lg"
+                  variant="secondary"
+                  onClick={() => {
+                    if (canJoinWithCode) {
+                      void beginJoinFlow();
+                      return;
+                    }
+
+                    document.getElementById('deskcall-invite-code')?.focus();
+                  }}
+                >
                   Join room
                 </Button>
                 {!isDesktopApp ? (
@@ -402,23 +409,47 @@ export function App() {
               </div>
             </Card>
 
-            <Card className="grid content-start gap-4 p-6">
+            <Card className="grid content-start gap-5 p-6">
               <div className="flex items-center gap-3">
                 <Users className="h-5 w-5 text-blue-200" />
-                <h2 className="text-lg font-semibold">Join by invite code</h2>
+                <div>
+                  <h2 className="text-lg font-semibold">Join by invite code</h2>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    Paste the six-character code from your host.
+                  </p>
+                </div>
               </div>
-              <Input
+
+              <InviteCodeInput
+                id="deskcall-invite-code"
                 value={joinCode}
-                onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
-                placeholder="ABC234"
-                maxLength={6}
+                onChange={setJoinCode}
+                onSubmit={() => void beginJoinFlow()}
+                autoFocus
               />
-              <Button variant="outline" onClick={() => void beginJoinFlow()} disabled={!joinCode}>
-                Preview before joining
-              </Button>
+
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  size="lg"
+                  className="flex-1"
+                  onClick={() => void beginJoinFlow()}
+                  disabled={!canJoinWithCode}
+                >
+                  Continue to preview
+                </Button>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => void beginCreateFlow()}
+                >
+                  Create a room instead
+                </Button>
+              </div>
+
               <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-zinc-400">
-                DeskCall rooms currently hold two people. That deliberate constraint keeps the beta
-                sturdy while the call stack gets battle-tested.
+                DeskCall rooms support up to {MAX_ROOM_PARTICIPANTS} people in one call. Hosts copy
+                their code from the call screen and share it with guests.
               </div>
             </Card>
           </section>
@@ -447,6 +478,18 @@ export function App() {
                     {mediaError}
                   </div>
                 ) : null}
+
+                {joinIntent === 'join' && canJoinWithCode ? (
+                  <div className="mt-5 rounded-2xl border border-zinc-700 bg-zinc-950/50 p-4">
+                    <p className="text-sm text-zinc-400">You are joining</p>
+                    <InviteCodeShare code={joinCode} compact />
+                  </div>
+                ) : joinIntent === 'create' ? (
+                  <p className="mt-5 text-sm text-zinc-400">
+                    Your invite code appears right after you create the room so you can copy and share
+                    it.
+                  </p>
+                ) : null}
               </div>
 
               <div className="grid gap-4">
@@ -464,16 +507,23 @@ export function App() {
                   </Button>
                 </div>
                 <div className="grid gap-3">
-                  <Button onClick={createRoom} disabled={!localStream || !call.signalingConnected}>
-                    Create room
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={joinRoom}
-                    disabled={!localStream || !joinCode || !call.signalingConnected}
-                  >
-                    Join {joinCode || 'room'}
-                  </Button>
+                  {joinIntent === 'join' ? (
+                    <Button
+                      size="lg"
+                      onClick={joinRoom}
+                      disabled={!localStream || !canJoinWithCode || !call.signalingConnected}
+                    >
+                      Join room {joinCode}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="lg"
+                      onClick={createRoom}
+                      disabled={!localStream || !call.signalingConnected}
+                    >
+                      Create room and get invite code
+                    </Button>
+                  )}
                 </div>
               </div>
             </Card>
@@ -484,47 +534,67 @@ export function App() {
           <section className="grid flex-1 gap-6 xl:grid-cols-[1fr_24rem]">
             <div className="grid gap-6">
               <Card className="grid gap-4 p-4">
-                <div className="relative grid gap-4 lg:grid-cols-[1fr_18rem]">
-                  <div ref={remoteVideoWrapperRef}>
+                <div className="relative">
+                  {call.remoteParticipants.length === 0 ? (
                     <VideoSurface
-                      stream={call.remoteStream}
-                      label="Remote participant"
-                      placeholder="Waiting for another participant"
+                      stream={null}
+                      label="Waiting for others"
+                      placeholder="Share the room code to invite up to three more people"
                       className="h-[32rem]"
                       sinkId={settings.preferredSpeakerId}
                     />
-                  </div>
-                  <div className="absolute right-4 top-4 z-10 w-32 sm:w-40 lg:static lg:w-auto">
-                    <VideoSurface
-                      stream={localStream}
-                      muted
-                      label={isCameraEnabled ? 'You' : 'Camera off'}
-                      className="h-44 border border-white/10 shadow-2xl lg:h-[32rem]"
-                    />
-                  </div>
+                  ) : call.remoteParticipants.length === 1 ? (
+                    <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
+                      <VideoSurface
+                        stream={call.remoteParticipants[0]?.stream ?? null}
+                        label={shortParticipantLabel(call.remoteParticipants[0]!.id)}
+                        placeholder="Connecting…"
+                        className="h-[32rem]"
+                        sinkId={settings.preferredSpeakerId}
+                      />
+                      <VideoSurface
+                        stream={localStream}
+                        muted
+                        label={isCameraEnabled ? 'You' : 'Camera off'}
+                        className="h-44 border border-white/10 shadow-2xl lg:h-[32rem]"
+                      />
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {call.remoteParticipants.map((participant) => (
+                        <VideoSurface
+                          key={participant.id}
+                          stream={participant.stream}
+                          label={shortParticipantLabel(participant.id)}
+                          placeholder="Connecting…"
+                          className="h-56 sm:h-64"
+                          sinkId={settings.preferredSpeakerId}
+                        />
+                      ))}
+                      <VideoSurface
+                        stream={localStream}
+                        muted
+                        label={isCameraEnabled ? 'You' : 'Camera off'}
+                        className="h-56 border border-white/10 sm:h-64"
+                      />
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge>{roomCopyLabel}</Badge>
-                    <Badge>{call.participants.length}/2 present</Badge>
-                    {!isMicEnabled ? <Badge className="text-amber-200">Mic muted</Badge> : null}
-                    {!isCameraEnabled ? <Badge className="text-amber-200">Camera off</Badge> : null}
-                    {call.isScreenSharing ? (
-                      <Badge className="text-blue-200">Sharing screen</Badge>
-                    ) : null}
-                    <Badge>{videoQualityProfiles[call.qualityTier].label}</Badge>
-                  </div>
-                  {call.roomId ? (
-                    <Button
-                      variant="outline"
-                      onClick={() => void navigator.clipboard.writeText(call.roomId!)}
-                    >
-                      <Copy className="h-4 w-4" />
-                      Copy code
-                    </Button>
+                {call.roomId ? <InviteCodeShare code={call.roomId} /> : null}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge>
+                    {call.participants.length}/{MAX_ROOM_PARTICIPANTS} present
+                  </Badge>
+                  {!isMicEnabled ? <Badge className="text-amber-200">Mic muted</Badge> : null}
+                  {!isCameraEnabled ? <Badge className="text-amber-200">Camera off</Badge> : null}
+                  {call.isScreenSharing ? (
+                    <Badge className="text-blue-200">Sharing screen</Badge>
                   ) : null}
+                  <Badge>{videoQualityProfiles[call.qualityTier].label}</Badge>
                 </div>
+
               </Card>
 
               <Card className="grid gap-4 p-5">
@@ -595,7 +665,12 @@ export function App() {
                     >
                       <div>{message.body}</div>
                       <div className="mt-2 text-[11px] text-zinc-500">
-                        {message.author === 'me' ? 'You' : 'Peer'} · {formatTime(message.sentAt)}
+                        {message.author === 'me'
+                          ? 'You'
+                          : message.senderId
+                            ? shortParticipantLabel(message.senderId)
+                            : 'Peer'}{' '}
+                        · {formatTime(message.sentAt)}
                       </div>
                     </div>
                   ))

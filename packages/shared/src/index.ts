@@ -1,11 +1,15 @@
 import { z } from 'zod';
 
+export const ROOM_CODE_PATTERN = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/;
+
 export const roomIdSchema = z
   .string()
   .trim()
-  .regex(/^[A-Z2-9]{6}$/, 'Room codes use six uppercase letters or digits.');
+  .regex(ROOM_CODE_PATTERN, 'Room codes use six uppercase letters or digits (no I, O, 0, or 1).');
 
 export type RoomId = z.infer<typeof roomIdSchema>;
+
+export const MAX_ROOM_PARTICIPANTS = 4;
 
 export type ConnectionStatus =
   | 'idle'
@@ -43,16 +47,22 @@ export interface RoomErrorPayload {
 
 export interface SignalOfferPayload {
   roomId: RoomId;
+  targetId: string;
+  fromId?: string;
   description: RTCSessionDescriptionInit;
 }
 
 export interface SignalAnswerPayload {
   roomId: RoomId;
+  targetId: string;
+  fromId?: string;
   description: RTCSessionDescriptionInit;
 }
 
 export interface SignalIceCandidatePayload {
   roomId: RoomId;
+  targetId: string;
+  fromId?: string;
   candidate: RTCIceCandidateInit;
 }
 
@@ -77,7 +87,9 @@ export const chatMessagePayloadSchema = z.object({
   sentAt: z.number().int().nonnegative()
 });
 
-export type ChatMessagePayload = z.infer<typeof chatMessagePayloadSchema>;
+export type ChatMessagePayload = z.infer<typeof chatMessagePayloadSchema> & {
+  senderId?: string;
+};
 
 export interface ServerToClientEvents {
   'room:created': (payload: RoomCreatedPayload) => void;
@@ -111,6 +123,7 @@ export interface AppSettings {
 export interface ChatMessage {
   id: string;
   author: 'me' | 'peer';
+  senderId?: string;
   body: string;
   sentAt: number;
 }

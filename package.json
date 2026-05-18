@@ -16,19 +16,27 @@
     "preview:web": "npm run preview:web --workspace @deskcall/desktop",
     "typecheck": "npm run build --workspace @deskcall/shared && npm run typecheck --workspace @deskcall/shared && npm run typecheck --workspace @deskcall/server && npm run typecheck --workspace @deskcall/desktop",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "package:windows": "npm run package:windows --workspace @deskcall/desktop",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@vitest/coverage-v8": "^4.0.18",
     "concurrently": "^9.2.1",
+    "happy-dom": "^20.6.2",
     "eslint": "^10.4.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^16.5.0",
     "prettier": "^3.8.3",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.3"
+    "typescript-eslint": "^8.59.3",
+    "vitest": "^4.0.18"
   }
 }

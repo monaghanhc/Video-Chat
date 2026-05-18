@@ -60,8 +60,10 @@ export const videoQualityProfiles: Record<
   }
 };
 
-export function getPreferredMediaConstraints(): MediaStreamConstraints {
-  const compactViewport = window.innerWidth < 768;
+export function getPreferredMediaConstraints(
+  viewportWidth: number = typeof window === 'undefined' ? 1280 : window.innerWidth
+): MediaStreamConstraints {
+  const compactViewport = viewportWidth < 768;
 
   return {
     audio: {

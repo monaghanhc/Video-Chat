@@ -10,7 +10,9 @@ export default tseslint.config(
       '**/dist/**',
       '**/dist-electron/**',
       '**/release/**',
-      '**/.vite/**'
+      '**/.vite/**',
+      'vitest.config.ts',
+      'vitest.setup.ts'
     ]
   },
   js.configs.recommended,

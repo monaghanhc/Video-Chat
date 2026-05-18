@@ -170,7 +170,7 @@ NATs."
 
 ## Known limitations
 
-- rooms intentionally support only two participants
+- rooms support up to four participants in a mesh call
 - TURN credentials are not bundled; add your own before serious production rollout
 - there is no authentication or abuse prevention beyond lightweight rate limiting yet
 - screen sharing currently uses Electron's capture flow without a custom branded source picker
