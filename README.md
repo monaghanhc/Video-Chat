@@ -5,7 +5,7 @@ Express, Socket.IO, and WebRTC. The MVP is intentionally free to run: the media 
 the signaling server is lightweight, and no paid service is required until you need stronger NAT
 traversal in production.
 
-[![Download DeskCall for Windows](https://img.shields.io/badge/Download-Windows%20installer-2563eb?style=for-the-badge&logo=windows)](https://github.com/monaghanhc/Video-Chat/releases/latest/download/DeskCall-Setup-0.1.0-beta.4.exe)
+[![Download DeskCall for Windows](https://img.shields.io/badge/Download-Windows%20installer-2563eb?style=for-the-badge&logo=windows)](https://github.com/monaghanhc/Video-Chat/releases/latest/download/DeskCall-Setup-0.1.0-beta.5.exe)
 [![Open DeskCall web app](https://img.shields.io/badge/Open-Web%20app-111827?style=for-the-badge&logo=googlechrome)](https://monaghanhc.github.io/Video-Chat/)
 [![Deploy signaling server to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/monaghanhc/Video-Chat)
 
@@ -118,7 +118,7 @@ npm run package:windows
 Artifacts are written to `apps/desktop/release/` with names like:
 
 ```text
-DeskCall-Setup-0.1.0-beta.4.exe
+DeskCall-Setup-0.1.0-beta.5.exe
 ```
 
 The repository includes placeholder icon assets in `apps/desktop/build/` plus installer metadata and

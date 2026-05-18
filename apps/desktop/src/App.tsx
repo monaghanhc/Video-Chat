@@ -232,6 +232,7 @@ export function App() {
     () => (call.roomId ? `Invite code ${call.roomId}` : 'No room yet'),
     [call.roomId]
   );
+  const canChat = Boolean(call.roomId && call.signalingConnected);
 
   const installWebApp = useCallback(async () => {
     if (!installPrompt) {
@@ -557,7 +558,13 @@ export function App() {
               <div>
                 <h2 className="text-lg font-semibold">In-call chat</h2>
                 <p className="mt-1 text-sm text-zinc-400">
-                  {call.dataChannelReady ? 'Peer-to-peer chat is live.' : 'Chat opens once connected.'}
+                  {!call.roomId
+                    ? 'Join a room to chat.'
+                    : call.dataChannelReady
+                      ? 'Peer-to-peer chat is live.'
+                      : call.signalingConnected
+                        ? 'Room chat is live while media connects.'
+                        : 'Chat resumes when signaling reconnects.'}
                 </p>
               </div>
               <div className="mt-5 flex-1 space-y-3 overflow-y-auto">
@@ -586,9 +593,9 @@ export function App() {
                   value={chatDraft}
                   onChange={(event) => setChatDraft(event.target.value)}
                   placeholder="Write a message"
-                  disabled={!call.dataChannelReady}
+                  disabled={!canChat}
                 />
-                <Button size="icon" disabled={!call.dataChannelReady || !chatDraft.trim()}>
+                <Button size="icon" disabled={!canChat || !chatDraft.trim()}>
                   <SendHorizontal className="h-4 w-4" />
                 </Button>
               </form>

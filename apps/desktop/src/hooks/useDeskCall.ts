@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import {
+  type ChatMessagePayload,
   type ChatMessage,
   type ClientToServerEvents,
   type ConnectionStatus,
@@ -513,6 +514,22 @@ export function useDeskCall({
       }
     });
 
+    socket.on('chat:message', (payload: ChatMessagePayload) => {
+      if (payload.roomId !== roomIdRef.current) {
+        return;
+      }
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: payload.id,
+          author: 'peer',
+          body: payload.body,
+          sentAt: payload.sentAt
+        }
+      ]);
+    });
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
@@ -539,17 +556,31 @@ export function useDeskCall({
 
   const sendMessage = useCallback((body: string) => {
     const trimmedBody = body.trim();
+    const activeRoomId = roomIdRef.current;
 
-    if (!trimmedBody || dataChannelRef.current?.readyState !== 'open') {
+    if (!trimmedBody || !activeRoomId) {
       return;
     }
 
+    const id = crypto.randomUUID();
     const sentAt = Date.now();
-    dataChannelRef.current.send(JSON.stringify({ body: trimmedBody, sentAt }));
+    const dataChannel = dataChannelRef.current;
+
+    if (dataChannel?.readyState === 'open') {
+      dataChannel.send(JSON.stringify({ body: trimmedBody, sentAt }));
+    } else {
+      socketRef.current?.emit('chat:message', {
+        roomId: activeRoomId,
+        id,
+        body: trimmedBody,
+        sentAt
+      });
+    }
+
     setMessages((current) => [
       ...current,
       {
-        id: crypto.randomUUID(),
+        id,
         author: 'me',
         body: trimmedBody,
         sentAt

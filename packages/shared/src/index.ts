@@ -68,6 +68,17 @@ export interface PeerDisconnectedPayload {
   participants: ParticipantPresence[];
 }
 
+export const chatMessageBodySchema = z.string().trim().min(1).max(1000);
+
+export const chatMessagePayloadSchema = z.object({
+  roomId: roomIdSchema,
+  id: z.string().uuid(),
+  body: chatMessageBodySchema,
+  sentAt: z.number().int().nonnegative()
+});
+
+export type ChatMessagePayload = z.infer<typeof chatMessagePayloadSchema>;
+
 export interface ServerToClientEvents {
   'room:created': (payload: RoomCreatedPayload) => void;
   'room:joined': (payload: RoomJoinedPayload) => void;
@@ -77,6 +88,7 @@ export interface ServerToClientEvents {
   'signal:offer': (payload: SignalOfferPayload) => void;
   'signal:answer': (payload: SignalAnswerPayload) => void;
   'signal:ice-candidate': (payload: SignalIceCandidatePayload) => void;
+  'chat:message': (payload: ChatMessagePayload) => void;
 }
 
 export interface ClientToServerEvents {
@@ -86,6 +98,7 @@ export interface ClientToServerEvents {
   'signal:offer': (payload: SignalOfferPayload) => void;
   'signal:answer': (payload: SignalAnswerPayload) => void;
   'signal:ice-candidate': (payload: SignalIceCandidatePayload) => void;
+  'chat:message': (payload: ChatMessagePayload) => void;
 }
 
 export interface AppSettings {
@@ -101,4 +114,3 @@ export interface ChatMessage {
   body: string;
   sentAt: number;
 }
-

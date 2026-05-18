@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { randomInt } from 'node:crypto';
 import { Server, type Socket } from 'socket.io';
 import {
+  chatMessagePayloadSchema,
   roomIdSchema,
   type ClientToServerEvents,
   type ParticipantPresence,
@@ -245,6 +246,22 @@ io.on('connection', (socket) => {
     }
 
     socket.to(payload.roomId).emit('signal:ice-candidate', payload);
+  });
+
+  socket.on('chat:message', (payload) => {
+    const parsedPayload = chatMessagePayloadSchema.safeParse(payload);
+
+    if (!parsedPayload.success || !ensureRoomMembership(socket, parsedPayload.data.roomId)) {
+      return;
+    }
+
+    const message = {
+      ...parsedPayload.data,
+      sentAt: Date.now()
+    };
+
+    socket.to(message.roomId).emit('chat:message', message);
+    console.info(`[chat] ${socket.id} -> ${message.roomId}`);
   });
 
   socket.on('disconnect', (reason) => {
