@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: deskcall-signaling
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build --workspace @deskcall/shared && npm run build --workspace @deskcall/server
+    startCommand: npm run start --workspace @deskcall/server
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: CORS_ORIGIN
+        sync: false
+      - key: ROOM_RATE_LIMIT_WINDOW_MS
+        value: 60000
+      - key: ROOM_RATE_LIMIT_MAX
+        value: 20

@@ -7,6 +7,7 @@ traversal in production.
 
 [![Download DeskCall for Windows](https://img.shields.io/badge/Download-Windows%20installer-2563eb?style=for-the-badge&logo=windows)](https://github.com/monaghanhc/Video-Chat/releases/latest/download/DeskCall-Setup-0.1.0-beta.1.exe)
 [![Open DeskCall web app](https://img.shields.io/badge/Open-Web%20app-111827?style=for-the-badge&logo=googlechrome)](https://monaghanhc.github.io/Video-Chat/)
+[![Deploy signaling server to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/monaghanhc/Video-Chat)
 
 ## Monorepo layout
 
@@ -87,7 +88,8 @@ The web build includes:
 - an in-app `Install app` affordance where the browser exposes install prompts
 
 For real deployments, set the GitHub Actions repository variable `VITE_SIGNALING_SERVER_URL` to the
-public signaling server URL so visitors land on a usable server immediately.
+public signaling server URL so visitors land on a usable server immediately. A `render.yaml` Blueprint
+is included for the signaling server, and the button above opens the free Render deployment flow.
 
 ## Test a call between two computers
 
