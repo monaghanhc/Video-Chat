@@ -63,6 +63,10 @@ const browserSettingsBridge = {
   }
 };
 
+const WINDOWS_INSTALLER_URL =
+  import.meta.env.VITE_WINDOWS_INSTALLER_URL ??
+  'https://github.com/monaghanhc/Video-Chat/releases/latest/download/DeskCall-Setup.exe';
+
 const statusCopy: Record<ConnectionStatus, string> = {
   idle: 'Idle',
   waiting: 'Waiting for peer',
@@ -94,6 +98,7 @@ export function App() {
     localStream
   });
   const settingsBridge = window.deskcall ?? browserSettingsBridge;
+  const isDesktopApp = Boolean(window.deskcall);
 
   useEffect(() => {
     void settingsBridge.getSettings().then((storedSettings) => {
@@ -386,6 +391,14 @@ export function App() {
                 <Button size="lg" variant="secondary" onClick={() => void beginJoinFlow()}>
                   Join room
                 </Button>
+                {!isDesktopApp ? (
+                  <Button size="lg" variant="outline" asChild>
+                    <a href={WINDOWS_INSTALLER_URL}>
+                      <Download className="h-4 w-4" />
+                      Download for Windows
+                    </a>
+                  </Button>
+                ) : null}
               </div>
             </Card>
 

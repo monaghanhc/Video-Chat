@@ -1,6 +1,6 @@
 {
   "name": "@deskcall/desktop",
-  "version": "0.1.0-beta.5",
+  "version": "0.1.0-beta.6",
   "description": "Windows-first private video chat desktop app",
   "author": "DeskCall",
   "private": true,
@@ -44,7 +44,7 @@
   "build": {
     "appId": "com.deskcall.app",
     "productName": "DeskCall",
-    "artifactName": "DeskCall-Setup-${version}.${ext}",
+    "artifactName": "DeskCall-Setup.${ext}",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -65,6 +65,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
+      "runAfterFinish": true,
       "shortcutName": "DeskCall"
     },
     "mac": {

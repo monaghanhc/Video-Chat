@@ -1,0 +1,53 @@
+name: Release Windows installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run build --workspace @deskcall/shared
+
+      - name: Package Windows installer
+        run: npm run package:windows --workspace @deskcall/desktop
+        env:
+          # Unsigned builds install fine; skip signtool on CI.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/desktop/release/DeskCall-Setup.exe
+            apps/desktop/release/DeskCall-Setup.exe.blockmap
+          fail_on_unmatched_files: true
+
+      - name: Upload workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deskcall-windows-installer
+          path: |
+            apps/desktop/release/DeskCall-Setup.exe
+            apps/desktop/release/DeskCall-Setup.exe.blockmap
