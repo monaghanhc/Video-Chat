@@ -50,6 +50,13 @@ export default tseslint.config(
         ...globals.node
       }
     }
+  },
+  {
+    files: ['apps/desktop/public/sw.js'],
+    languageOptions: {
+      globals: {
+        ...globals.serviceworker
+      }
+    }
   }
 );
-

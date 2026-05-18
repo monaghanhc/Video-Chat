@@ -33,7 +33,9 @@ Useful commands:
 ```bash
 npm run dev:server
 npm run dev:desktop
+npm run dev:web
 npm run build
+npm run build:web
 npm run lint
 npm run typecheck
 npm run package:windows
@@ -52,6 +54,32 @@ DESKCALL_SIGNALING_SERVER_URL=http://localhost:4000
 
 The desktop app reads a default signaling URL from configuration, then lets each user override and
 persist it inside the Settings panel.
+
+## Installable web app
+
+DeskCall also ships as a downloadable web app (PWA). Run the web client locally with:
+
+```bash
+npm run dev:web
+```
+
+Build the static site bundle with:
+
+```bash
+npm run build:web
+npm run preview:web
+```
+
+Deploy the contents of `apps/desktop/dist/` to any HTTPS-capable static host such as Netlify, Vercel,
+Cloudflare Pages, Render static sites, or a VPS behind TLS. The web build includes:
+
+- `manifest.webmanifest`
+- install icons
+- a service worker app shell
+- an in-app `Install app` affordance where the browser exposes install prompts
+
+For real deployments, set `VITE_SIGNALING_SERVER_URL` to the public signaling server URL before the
+web build so visitors land on a usable server immediately.
 
 ## Test a call between two computers
 
@@ -139,4 +167,3 @@ The `electron-builder` config already includes a future `.dmg` target. Before sh
 - hardened runtime settings
 - notarization
 - final `.icns` artwork
-

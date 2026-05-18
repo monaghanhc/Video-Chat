@@ -3,6 +3,7 @@ import {
   Camera,
   CameraOff,
   Copy,
+  Download,
   Mic,
   MicOff,
   MonitorUp,
@@ -61,6 +62,8 @@ export function App() {
   const [isCameraEnabled, setIsCameraEnabled] = useState(true);
   const [isRequestingMedia, setIsRequestingMedia] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstalledWebApp, setIsInstalledWebApp] = useState(false);
 
   const { cameras, microphones, speakers, refresh, supportsSpeakerSelection } = useMediaDevices();
   const call = useDeskCall({
@@ -78,6 +81,31 @@ export function App() {
       setSettingsReady(true);
     });
   }, [settingsBridge]);
+
+  useEffect(() => {
+    const updateInstallState = () => {
+      setIsInstalledWebApp(window.matchMedia('(display-mode: standalone)').matches);
+    };
+
+    const handleBeforeInstallPrompt = (event: BeforeInstallPromptEvent) => {
+      event.preventDefault();
+      setInstallPrompt(event);
+    };
+
+    const handleAppInstalled = () => {
+      setInstallPrompt(null);
+      setIsInstalledWebApp(true);
+    };
+
+    updateInstallState();
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
 
   const persistSettings = useCallback(async (nextSettings: AppSettings) => {
     setSettings(nextSettings);
@@ -178,6 +206,16 @@ export function App() {
     [call.roomId]
   );
 
+  const installWebApp = useCallback(async () => {
+    if (!installPrompt) {
+      return;
+    }
+
+    await installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
+  }, [installPrompt]);
+
   if (!settingsReady) {
     return (
       <main className="flex min-h-screen items-center justify-center p-6">
@@ -189,7 +227,7 @@ export function App() {
   return (
     <main className="min-h-screen p-6 text-zinc-100">
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-7xl flex-col gap-6">
-        <header className="flex items-center justify-between">
+        <header className="flex items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-3">
               <div className="rounded-2xl bg-blue-500/20 px-3 py-2 text-sm font-semibold text-blue-200">
@@ -201,13 +239,22 @@ export function App() {
               </Badge>
             </div>
             <p className="mt-3 text-sm text-zinc-400">
-              Windows-first private video calls with room codes, chat, and screen sharing.
+              Private video calls with room codes, chat, and screen sharing.
             </p>
           </div>
-          <Button variant="secondary" onClick={() => setShowSettings((current) => !current)}>
-            <Settings2 className="h-4 w-4" />
-            Settings
-          </Button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {isInstalledWebApp ? <Badge className="text-blue-200">Installed app</Badge> : null}
+            {installPrompt ? (
+              <Button variant="outline" onClick={() => void installWebApp()}>
+                <Download className="h-4 w-4" />
+                Install app
+              </Button>
+            ) : null}
+            <Button variant="secondary" onClick={() => setShowSettings((current) => !current)}>
+              <Settings2 className="h-4 w-4" />
+              Settings
+            </Button>
+          </div>
         </header>
 
         {showSettings ? (
@@ -301,7 +348,7 @@ export function App() {
                 </h1>
                 <p className="mt-5 max-w-xl text-lg leading-8 text-zinc-400">
                   Create a room, share the code, and talk peer-to-peer. No account wall, no paid
-                  service dependency, and the path to macOS is already paved.
+                  service dependency, and available as both a desktop app and installable web app.
                 </p>
               </div>
               <div className="mt-8 flex flex-wrap gap-3">
