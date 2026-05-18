@@ -13,6 +13,7 @@ const defaultSettings: AppSettings = {
   signalingServerUrl:
     process.env.DESKCALL_SIGNALING_SERVER_URL ?? 'https://deskcall-signaling.onrender.com'
 };
+const localSignalingUrls = new Set(['http://localhost:4000', 'http://127.0.0.1:4000']);
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -23,10 +24,19 @@ function settingsPath(): string {
 async function readSettings(): Promise<AppSettings> {
   try {
     const raw = await fs.readFile(settingsPath(), 'utf8');
-    return {
+    const storedSettings = {
       ...defaultSettings,
       ...(JSON.parse(raw) as Partial<AppSettings>)
     };
+
+    if (app.isPackaged && localSignalingUrls.has(storedSettings.signalingServerUrl)) {
+      return {
+        ...storedSettings,
+        signalingServerUrl: defaultSettings.signalingServerUrl
+      };
+    }
+
+    return storedSettings;
   } catch {
     return defaultSettings;
   }

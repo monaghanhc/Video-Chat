@@ -31,10 +31,31 @@ const defaultSettings: AppSettings = {
     import.meta.env.VITE_SIGNALING_SERVER_URL ?? 'https://deskcall-signaling.onrender.com'
 };
 
+const localSignalingUrls = new Set(['http://localhost:4000', 'http://127.0.0.1:4000']);
+
+function normalizePersistedSettings(storedSettings: Partial<AppSettings>): AppSettings {
+  const mergedSettings = {
+    ...defaultSettings,
+    ...storedSettings
+  };
+
+  const isProductionWebHost =
+    window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+
+  if (isProductionWebHost && localSignalingUrls.has(mergedSettings.signalingServerUrl)) {
+    return {
+      ...mergedSettings,
+      signalingServerUrl: defaultSettings.signalingServerUrl
+    };
+  }
+
+  return mergedSettings;
+}
+
 const browserSettingsBridge = {
   async getSettings(): Promise<AppSettings> {
     const raw = window.localStorage.getItem('deskcall:settings');
-    return raw ? ({ ...defaultSettings, ...JSON.parse(raw) } as AppSettings) : defaultSettings;
+    return raw ? normalizePersistedSettings(JSON.parse(raw) as Partial<AppSettings>) : defaultSettings;
   },
   async setSettings(nextSettings: AppSettings): Promise<AppSettings> {
     window.localStorage.setItem('deskcall:settings', JSON.stringify(nextSettings));
@@ -76,10 +97,7 @@ export function App() {
 
   useEffect(() => {
     void settingsBridge.getSettings().then((storedSettings) => {
-      setSettings({
-        ...defaultSettings,
-        ...storedSettings
-      });
+      setSettings(normalizePersistedSettings(storedSettings));
       setSettingsReady(true);
     });
   }, [settingsBridge]);
