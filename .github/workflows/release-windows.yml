@@ -25,29 +25,46 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build shared package
-        run: npm run build --workspace @deskcall/shared
-
       - name: Package Windows installer
-        run: npm run package:windows --workspace @deskcall/desktop
+        run: npm run package:windows
         env:
-          # Unsigned builds install fine; skip signtool on CI.
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          VITE_SIGNALING_SERVER_URL: ${{ vars.VITE_SIGNALING_SERVER_URL }}
+
+      - name: Verify installer artifact
+        shell: pwsh
+        run: |
+          $installer = "apps/desktop/release/DeskCall-Setup.exe"
+          if (-not (Test-Path $installer)) {
+            throw "Installer not found at $installer"
+          }
+          $size = (Get-Item $installer).Length
+          if ($size -lt 50MB) {
+            throw "Installer looks too small ($size bytes)."
+          }
+          Write-Host "Installer size: $size bytes"
+
+      - name: Resolve release tag
+        id: release
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}".StartsWith('refs/tags/')) {
+            $tag = "${{ github.ref }}".Replace('refs/tags/', '')
+          } else {
+            $v = (Get-Content apps/desktop/package.json | ConvertFrom-Json).version
+            $tag = "v$v"
+          }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Publish release assets
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: DeskCall ${{ steps.release.outputs.tag }}
+          prerelease: true
+          make_latest: true
+          generate_release_notes: true
           files: |
             apps/desktop/release/DeskCall-Setup.exe
             apps/desktop/release/DeskCall-Setup.exe.blockmap
           fail_on_unmatched_files: true
-
-      - name: Upload workflow artifact
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: deskcall-windows-installer
-          path: |
-            apps/desktop/release/DeskCall-Setup.exe
-            apps/desktop/release/DeskCall-Setup.exe.blockmap

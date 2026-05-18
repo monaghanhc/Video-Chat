@@ -1,6 +1,6 @@
 {
   "name": "@deskcall/desktop",
-  "version": "0.1.0-beta.6",
+  "version": "0.1.0-beta.7",
   "description": "Windows-first private video chat desktop app",
   "author": "DeskCall",
   "private": true,

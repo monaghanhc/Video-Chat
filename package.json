@@ -19,7 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "package:windows": "npm run package:windows --workspace @deskcall/desktop",
+    "package:windows": "npm run build --workspace @deskcall/shared && npm run package:windows --workspace @deskcall/desktop",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

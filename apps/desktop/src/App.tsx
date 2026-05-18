@@ -400,7 +400,12 @@ export function App() {
                 </Button>
                 {!isDesktopApp ? (
                   <Button size="lg" variant="outline" asChild>
-                    <a href={WINDOWS_INSTALLER_URL}>
+                    <a
+                      href={WINDOWS_INSTALLER_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download="DeskCall-Setup.exe"
+                    >
                       <Download className="h-4 w-4" />
                       Download for Windows
                     </a>
