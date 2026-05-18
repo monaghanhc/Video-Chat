@@ -61,7 +61,7 @@ jobs:
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           name: DeskCall ${{ steps.release.outputs.tag }}
-          prerelease: true
+          prerelease: false
           make_latest: true
           generate_release_notes: true
           files: |
