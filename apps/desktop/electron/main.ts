@@ -10,7 +10,8 @@ interface AppSettings {
 }
 
 const defaultSettings: AppSettings = {
-  signalingServerUrl: process.env.DESKCALL_SIGNALING_SERVER_URL ?? 'http://localhost:4000'
+  signalingServerUrl:
+    process.env.DESKCALL_SIGNALING_SERVER_URL ?? 'https://deskcall-signaling.onrender.com'
 };
 
 let mainWindow: BrowserWindow | null = null;

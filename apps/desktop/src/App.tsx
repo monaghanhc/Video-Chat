@@ -26,7 +26,8 @@ import { formatTime } from './lib/utils';
 type Screen = 'welcome' | 'precall' | 'call';
 
 const defaultSettings: AppSettings = {
-  signalingServerUrl: import.meta.env.VITE_SIGNALING_SERVER_URL ?? 'http://localhost:4000'
+  signalingServerUrl:
+    import.meta.env.VITE_SIGNALING_SERVER_URL ?? 'https://deskcall-signaling.onrender.com'
 };
 
 const browserSettingsBridge = {
