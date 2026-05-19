@@ -7,7 +7,7 @@ import { signAccessToken } from './auth/tokens.js';
 
 const config = loadConfig({
   NODE_ENV: 'test',
-  PORT: 4010,
+  PORT: '4010',
   JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
   DATABASE_PATH: ':memory:'
