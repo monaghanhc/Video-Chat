@@ -12,7 +12,7 @@
     "dev:desktop": "npm run build --workspace @deskcall/shared && npm run dev --workspace @deskcall/desktop",
     "dev:web": "npm run dev:renderer --workspace @deskcall/desktop",
     "build": "npm run build --workspace @deskcall/shared && npm run build --workspace @deskcall/server && npm run build --workspace @deskcall/desktop",
-    "build:web": "npm run build:renderer --workspace @deskcall/desktop",
+    "build:web": "npm run build --workspace @deskcall/shared && npm run build:renderer --workspace @deskcall/desktop",
     "preview:web": "npm run preview:web --workspace @deskcall/desktop",
     "typecheck": "npm run build --workspace @deskcall/shared && npm run typecheck --workspace @deskcall/shared && npm run typecheck --workspace @deskcall/server && npm run typecheck --workspace @deskcall/desktop",
     "lint": "eslint .",
