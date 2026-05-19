@@ -13,4 +13,8 @@ coverage/
 *.log
 .DS_Store
 Thumbs.db
+data/
+*.db
+*.db-shm
+*.db-wal
 

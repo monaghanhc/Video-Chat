@@ -1,15 +1,11 @@
 import { z } from 'zod';
+import { sanitizeText } from './security.js';
+import { roomIdSchema, type RoomId } from './rooms.js';
 
-export const ROOM_CODE_PATTERN = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/;
-
-export const roomIdSchema = z
-  .string()
-  .trim()
-  .regex(ROOM_CODE_PATTERN, 'Room codes use six uppercase letters or digits (no I, O, 0, or 1).');
-
-export type RoomId = z.infer<typeof roomIdSchema>;
-
-export const MAX_ROOM_PARTICIPANTS = 4;
+export * from './security.js';
+export * from './rooms.js';
+export * from './auth.js';
+export * from './signals.js';
 
 export type ConnectionStatus =
   | 'idle'
@@ -22,6 +18,8 @@ export type ConnectionStatus =
 export interface ParticipantPresence {
   id: string;
   joinedAt: number;
+  displayName?: string;
+  userId?: string;
 }
 
 export interface RoomCreatedPayload {
@@ -40,7 +38,10 @@ export interface RoomErrorPayload {
     | 'ROOM_FULL'
     | 'ROOM_NOT_FOUND'
     | 'RATE_LIMITED'
+    | 'JOIN_RATE_LIMITED'
     | 'ALREADY_IN_ROOM'
+    | 'UNAUTHORIZED'
+    | 'BLOCKED'
     | 'UNKNOWN';
   message: string;
 }
@@ -78,7 +79,12 @@ export interface PeerDisconnectedPayload {
   participants: ParticipantPresence[];
 }
 
-export const chatMessageBodySchema = z.string().trim().min(1).max(1000);
+export const chatMessageBodySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(1000)
+  .transform((value) => sanitizeText(value, 1000));
 
 export const chatMessagePayloadSchema = z.object({
   roomId: roomIdSchema,
@@ -90,6 +96,11 @@ export const chatMessagePayloadSchema = z.object({
 export type ChatMessagePayload = z.infer<typeof chatMessagePayloadSchema> & {
   senderId?: string;
 };
+
+export interface RoomBlockPayload {
+  roomId: RoomId;
+  targetId: string;
+}
 
 export interface ServerToClientEvents {
   'room:created': (payload: RoomCreatedPayload) => void;
@@ -111,6 +122,9 @@ export interface ClientToServerEvents {
   'signal:answer': (payload: SignalAnswerPayload) => void;
   'signal:ice-candidate': (payload: SignalIceCandidatePayload) => void;
   'chat:message': (payload: ChatMessagePayload) => void;
+  'room:block': (payload: RoomBlockPayload) => void;
+  'room:unblock': (payload: RoomBlockPayload) => void;
+  'room:report': (payload: { roomId: RoomId; targetId: string; reason: string }) => void;
 }
 
 export interface AppSettings {

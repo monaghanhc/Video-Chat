@@ -17,6 +17,7 @@ import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
 import { Input } from './components/ui/input';
+import { AuthPanel } from './components/AuthPanel';
 import { InviteCodeInput } from './components/InviteCodeInput';
 import { InviteCodeShare } from './components/InviteCodeShare';
 import { VideoSurface } from './components/VideoSurface';
@@ -368,7 +369,7 @@ export function App() {
         ) : null}
 
         {screen === 'welcome' ? (
-          <section className="grid flex-1 gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <section className="grid flex-1 gap-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-start">
             <Card className="flex flex-col justify-between p-8">
               <div>
                 <p className="text-sm uppercase tracking-[0.25em] text-blue-200">Beta release</p>
@@ -457,6 +458,8 @@ export function App() {
                 their code from the call screen and share it with guests.
               </div>
             </Card>
+
+            <AuthPanel signalingServerUrl={settings.signalingServerUrl} />
           </section>
         ) : null}
 

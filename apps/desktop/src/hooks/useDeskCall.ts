@@ -10,6 +10,7 @@ import {
   type RoomId,
   type ServerToClientEvents
 } from '@deskcall/shared';
+import { ensureAccessToken } from '../lib/authSession';
 import {
   deriveConnectionStatus,
   participantLeftMessage,
@@ -528,18 +529,38 @@ export function useDeskCall({
   }, [closePeerConnection]);
 
   useEffect(() => {
-    const socket: DeskCallSocket = io(signalingServerUrl, {
-      transports: ['websocket'],
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 500,
-      reconnectionDelayMax: 5000
-    });
+    let cancelled = false;
+    let socket: DeskCallSocket | null = null;
 
-    socketRef.current = socket;
+    async function connectSignaling() {
+      try {
+        const token = await ensureAccessToken(signalingServerUrl);
+        if (cancelled) {
+          return;
+        }
 
-    socket.on('connect', () => {
-      const connectedId = socket.id ?? null;
+        socket = io(signalingServerUrl, {
+          transports: ['websocket'],
+          auth: { token },
+          reconnection: true,
+          reconnectionAttempts: Infinity,
+          reconnectionDelay: 500,
+          reconnectionDelayMax: 5000
+        });
+
+        socketRef.current = socket;
+        bindSocketEvents(socket);
+      } catch {
+        if (!cancelled) {
+          setSignalingConnected(false);
+          setError('Unable to authenticate with the signaling server.');
+        }
+      }
+    }
+
+    function bindSocketEvents(activeSocket: DeskCallSocket) {
+      activeSocket.on('connect', () => {
+      const connectedId = activeSocket.id ?? null;
       selfIdRef.current = connectedId;
       setSelfId(connectedId);
       setSignalingConnected(true);
@@ -548,11 +569,11 @@ export function useDeskCall({
       if (roomIdRef.current) {
         closePeerConnection();
         setStatus('connecting');
-        socket.emit('room:join', { roomId: roomIdRef.current });
+        activeSocket.emit('room:join', { roomId: roomIdRef.current });
       }
     });
 
-    socket.on('disconnect', () => {
+      activeSocket.on('disconnect', () => {
       setSignalingConnected(false);
       if (roomIdRef.current) {
         setStatus('disconnected');
@@ -560,12 +581,12 @@ export function useDeskCall({
       }
     });
 
-    socket.on('connect_error', () => {
+      activeSocket.on('connect_error', () => {
       setSignalingConnected(false);
       setError('Unable to reach the signaling server.');
     });
 
-    socket.on('room:created', (payload) => {
+      activeSocket.on('room:created', (payload) => {
       roleRef.current = 'creator';
       roomIdRef.current = payload.roomId;
       setRoomId(payload.roomId);
@@ -574,7 +595,7 @@ export function useDeskCall({
       setStatus('waiting');
     });
 
-    socket.on('room:joined', (payload) => {
+      activeSocket.on('room:joined', (payload) => {
       if (!roomIdRef.current) {
         roleRef.current = 'joiner';
       }
@@ -586,7 +607,7 @@ export function useDeskCall({
       updateCallStatus(payload.participants);
     });
 
-    socket.on('room:error', (payload: RoomErrorPayload) => {
+      activeSocket.on('room:error', (payload: RoomErrorPayload) => {
       setError(payload.message);
       if (payload.code === 'ROOM_NOT_FOUND' || payload.code === 'INVALID_ROOM') {
         roleRef.current = null;
@@ -597,7 +618,7 @@ export function useDeskCall({
       }
     });
 
-    socket.on('room:participant-joined', (payload) => {
+      activeSocket.on('room:participant-joined', (payload) => {
       setParticipants(payload.participants);
       syncDataChannelMode(payload.participants);
       updateCallStatus(payload.participants);
@@ -608,7 +629,7 @@ export function useDeskCall({
       }
     });
 
-    socket.on('room:participant-left', (payload) => {
+      activeSocket.on('room:participant-left', (payload) => {
       setParticipants(payload.participants);
       syncDataChannelMode(payload.participants);
       closePeerConnection(payload.participantId);
@@ -623,7 +644,7 @@ export function useDeskCall({
       }
     });
 
-    socket.on('signal:offer', async ({ fromId, targetId, description }) => {
+      activeSocket.on('signal:offer', async ({ fromId, targetId, description }) => {
       if (!fromId || (targetId && targetId !== selfIdRef.current)) {
         return;
       }
@@ -638,7 +659,7 @@ export function useDeskCall({
         armConnectionTimeout();
 
         if (roomIdRef.current) {
-          socket.emit('signal:answer', {
+          activeSocket.emit('signal:answer', {
             roomId: roomIdRef.current,
             targetId: fromId,
             description: answer
@@ -650,7 +671,7 @@ export function useDeskCall({
       }
     });
 
-    socket.on('signal:answer', async ({ fromId, targetId, description }) => {
+      activeSocket.on('signal:answer', async ({ fromId, targetId, description }) => {
       if (!fromId || (targetId && targetId !== selfIdRef.current)) {
         return;
       }
@@ -665,7 +686,7 @@ export function useDeskCall({
       }
     });
 
-    socket.on('signal:ice-candidate', async ({ fromId, targetId, candidate }) => {
+      activeSocket.on('signal:ice-candidate', async ({ fromId, targetId, candidate }) => {
       if (!fromId || (targetId && targetId !== selfIdRef.current)) {
         return;
       }
@@ -686,7 +707,7 @@ export function useDeskCall({
       }
     });
 
-    socket.on('chat:message', (payload: ChatMessagePayload) => {
+      activeSocket.on('chat:message', (payload: ChatMessagePayload) => {
       if (payload.roomId !== roomIdRef.current || payload.senderId === selfIdRef.current) {
         return;
       }
@@ -702,9 +723,13 @@ export function useDeskCall({
         }
       ]);
     });
+    }
+
+    void connectSignaling();
 
     return () => {
-      socket.disconnect();
+      cancelled = true;
+      socket?.disconnect();
       socketRef.current = null;
       closePeerConnection();
     };

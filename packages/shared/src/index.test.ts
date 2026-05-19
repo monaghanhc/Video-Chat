@@ -30,6 +30,17 @@ describe('chatMessagePayloadSchema', () => {
     });
   });
 
+  it('sanitizes script tags from chat bodies', () => {
+    const parsed = chatMessagePayloadSchema.parse({
+      roomId: 'ABC234',
+      id: '550e8400-e29b-41d4-a716-446655440000',
+      body: '<script>alert(1)</script>hello',
+      sentAt: 0
+    });
+
+    expect(parsed.body).toBe('hello');
+  });
+
   it('rejects empty bodies', () => {
     expect(
       chatMessagePayloadSchema.safeParse({

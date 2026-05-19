@@ -7,16 +7,25 @@ export type RoomErrorCode =
   | 'ROOM_FULL'
   | 'ROOM_NOT_FOUND'
   | 'RATE_LIMITED'
-  | 'ALREADY_IN_ROOM';
+  | 'JOIN_RATE_LIMITED'
+  | 'ALREADY_IN_ROOM'
+  | 'BLOCKED';
 
 export interface RoomStoreConfig {
   maxParticipants?: number;
   createWindowMs: number;
   createMax: number;
+  joinWindowMs?: number;
+  joinMax?: number;
 }
 
 export interface RoomStoreSnapshot {
   roomCount: number;
+}
+
+export interface ParticipantMeta {
+  displayName?: string;
+  userId?: string;
 }
 
 type RoomState = Map<string, ParticipantPresence>;
@@ -28,12 +37,25 @@ export function createRoomStore(
   randomInt: RandomInt = (max) => Math.floor(Math.random() * max)
 ) {
   const maxParticipants = config.maxParticipants ?? MAX_ROOM_PARTICIPANTS;
+  const joinWindowMs = config.joinWindowMs ?? config.createWindowMs;
+  const joinMax = config.joinMax ?? 30;
   const rooms = new Map<RoomId, RoomState>();
   const socketRooms = new Map<string, RoomId>();
   const roomCreateEvents = new Map<string, number[]>();
+  const roomJoinEvents = new Map<string, number[]>();
+  const roomBlocks = new Map<RoomId, Map<string, Set<string>>>();
 
   function participantsFor(roomId: RoomId): ParticipantPresence[] {
     return [...(rooms.get(roomId)?.values() ?? [])];
+  }
+
+  function buildParticipant(socketId: string, now: number, meta?: ParticipantMeta): ParticipantPresence {
+    return {
+      id: socketId,
+      joinedAt: now,
+      ...(meta?.displayName ? { displayName: meta.displayName } : {}),
+      ...(meta?.userId ? { userId: meta.userId } : {})
+    };
   }
 
   function generateRoomId(): RoomId {
@@ -51,18 +73,26 @@ export function createRoomStore(
     throw new Error('Unable to allocate a unique room code.');
   }
 
-  function canCreateRoom(socketId: string, now = Date.now()): boolean {
-    const cutoff = now - config.createWindowMs;
-    const recent = (roomCreateEvents.get(socketId) ?? []).filter((timestamp) => timestamp > cutoff);
+  function trackEvent(bucket: Map<string, number[]>, socketId: string, windowMs: number, max: number, now: number): boolean {
+    const cutoff = now - windowMs;
+    const recent = (bucket.get(socketId) ?? []).filter((timestamp) => timestamp > cutoff);
 
-    if (recent.length >= config.createMax) {
-      roomCreateEvents.set(socketId, recent);
+    if (recent.length >= max) {
+      bucket.set(socketId, recent);
       return false;
     }
 
     recent.push(now);
-    roomCreateEvents.set(socketId, recent);
+    bucket.set(socketId, recent);
     return true;
+  }
+
+  function canCreateRoom(socketId: string, now = Date.now()): boolean {
+    return trackEvent(roomCreateEvents, socketId, config.createWindowMs, config.createMax, now);
+  }
+
+  function canAttemptJoin(socketId: string, now = Date.now()): boolean {
+    return trackEvent(roomJoinEvents, socketId, joinWindowMs, joinMax, now);
   }
 
   function getSocketRoom(socketId: string): RoomId | undefined {
@@ -77,8 +107,45 @@ export function createRoomStore(
     return socketRooms.get(socketId) === roomId && rooms.has(roomId);
   }
 
+  function isBlocked(roomId: RoomId, actorId: string, targetId: string): boolean {
+    const blocks = roomBlocks.get(roomId);
+    if (!blocks) {
+      return false;
+    }
+
+    return blocks.get(actorId)?.has(targetId) ?? false;
+  }
+
+  function isPairBlocked(roomId: RoomId, a: string, b: string): boolean {
+    return isBlocked(roomId, a, b) || isBlocked(roomId, b, a);
+  }
+
+  function blockPeer(roomId: RoomId, actorId: string, targetId: string): boolean {
+    if (!isRoomMember(actorId, roomId) || !rooms.has(roomId)) {
+      return false;
+    }
+
+    const blocks = roomBlocks.get(roomId) ?? new Map<string, Set<string>>();
+    const actorBlocks = blocks.get(actorId) ?? new Set<string>();
+    actorBlocks.add(targetId);
+    blocks.set(actorId, actorBlocks);
+    roomBlocks.set(roomId, blocks);
+    return true;
+  }
+
+  function unblockPeer(roomId: RoomId, actorId: string, targetId: string): boolean {
+    const blocks = roomBlocks.get(roomId);
+    if (!blocks) {
+      return false;
+    }
+
+    blocks.get(actorId)?.delete(targetId);
+    return true;
+  }
+
   function createRoom(
     socketId: string,
+    meta?: ParticipantMeta,
     now = Date.now()
   ):
     | { ok: true; roomId: RoomId; participants: ParticipantPresence[] }
@@ -100,10 +167,7 @@ export function createRoomStore(
     }
 
     const roomId = generateRoomId();
-    const participant: ParticipantPresence = {
-      id: socketId,
-      joinedAt: now
-    };
+    const participant = buildParticipant(socketId, now, meta);
 
     rooms.set(roomId, new Map([[socketId, participant]]));
     socketRooms.set(socketId, roomId);
@@ -118,6 +182,7 @@ export function createRoomStore(
   function joinRoom(
     socketId: string,
     rawRoomId: string,
+    meta?: ParticipantMeta,
     now = Date.now()
   ):
     | {
@@ -127,6 +192,14 @@ export function createRoomStore(
         participants: ParticipantPresence[];
       }
     | { ok: false; code: RoomErrorCode; message: string } {
+    if (!canAttemptJoin(socketId, now)) {
+      return {
+        ok: false,
+        code: 'JOIN_RATE_LIMITED',
+        message: 'Too many join attempts. Wait a moment and try again.'
+      };
+    }
+
     const parsedRoomId = roomIdSchema.safeParse(rawRoomId);
 
     if (!parsedRoomId.success) {
@@ -155,6 +228,16 @@ export function createRoomStore(
       };
     }
 
+    for (const participant of room.values()) {
+      if (isBlocked(parsedRoomId.data, participant.id, socketId)) {
+        return {
+          ok: false,
+          code: 'BLOCKED',
+          message: 'You cannot join this room.'
+        };
+      }
+    }
+
     if (room.size >= maxParticipants) {
       return {
         ok: false,
@@ -163,10 +246,7 @@ export function createRoomStore(
       };
     }
 
-    const participant: ParticipantPresence = {
-      id: socketId,
-      joinedAt: now
-    };
+    const participant = buildParticipant(socketId, now, meta);
 
     room.set(socketId, participant);
     socketRooms.set(socketId, parsedRoomId.data);
@@ -209,6 +289,7 @@ export function createRoomStore(
 
     if (room.size === 0) {
       rooms.delete(roomId);
+      roomBlocks.delete(roomId);
       return {
         ok: true,
         roomId,
@@ -229,6 +310,7 @@ export function createRoomStore(
 
   function clearSocket(socketId: string): ReturnType<typeof leaveRoom> {
     roomCreateEvents.delete(socketId);
+    roomJoinEvents.delete(socketId);
     return leaveRoom(socketId);
   }
 
@@ -242,11 +324,15 @@ export function createRoomStore(
     leaveRoom,
     clearSocket,
     canCreateRoom,
+    canAttemptJoin,
     generateRoomId,
     participantsFor,
     getSocketRoom,
     isPeerInRoom,
     isRoomMember,
+    isPairBlocked,
+    blockPeer,
+    unblockPeer,
     getSnapshot
   };
 }

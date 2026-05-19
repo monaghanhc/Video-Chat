@@ -68,9 +68,9 @@ describe('createRoomStore', () => {
       deterministicRandom([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
     );
 
-    expect(store.createRoom('host', 1_000).ok).toBe(true);
+    expect(store.createRoom('host', undefined, 1_000).ok).toBe(true);
     store.leaveRoom('host');
-    const limited = store.createRoom('host', 2_000);
+    const limited = store.createRoom('host', undefined, 2_000);
     expect(limited.ok).toBe(false);
     if (!limited.ok) {
       expect(limited.code).toBe('RATE_LIMITED');
@@ -178,9 +178,55 @@ describe('createRoomStore', () => {
       deterministicRandom([0, 1, 2, 3, 4, 5])
     );
 
-    expect(store.createRoom('host', 1_000).ok).toBe(true);
+    expect(store.createRoom('host', undefined, 1_000).ok).toBe(true);
     store.clearSocket('host');
-    expect(store.createRoom('host', 2_000).ok).toBe(true);
+    expect(store.createRoom('host', undefined, 2_000).ok).toBe(true);
+  });
+
+  it('enforces join attempt rate limits', () => {
+    const store = createRoomStore(
+      { createWindowMs: 60_000, createMax: 5, joinMax: 1 },
+      deterministicRandom([0, 1, 2, 3, 4, 5, 6])
+    );
+
+    const created = store.createRoom('host');
+    if (!created.ok) {
+      throw new Error('expected room');
+    }
+
+    const firstJoin = store.joinRoom('guest', created.roomId, undefined, 1_000);
+    expect(firstJoin.ok).toBe(true);
+    store.leaveRoom('guest');
+
+    const limited = store.joinRoom('guest', created.roomId, undefined, 2_000);
+    expect(limited.ok).toBe(false);
+    if (!limited.ok) {
+      expect(limited.code).toBe('JOIN_RATE_LIMITED');
+    }
+  });
+
+  it('blocks peers from joining and signaling', () => {
+    const store = createRoomStore(
+      { createWindowMs: 60_000, createMax: 5 },
+      deterministicRandom([2, 3, 4, 5, 6, 7])
+    );
+
+    const created = store.createRoom('host');
+    if (!created.ok) {
+      throw new Error('expected room');
+    }
+
+    store.blockPeer(created.roomId, 'host', 'blocked-guest');
+    const blockedJoin = store.joinRoom('blocked-guest', created.roomId);
+    expect(blockedJoin.ok).toBe(false);
+    if (!blockedJoin.ok) {
+      expect(blockedJoin.code).toBe('BLOCKED');
+    }
+
+    store.joinRoom('guest', created.roomId);
+    expect(store.isPairBlocked(created.roomId, 'host', 'guest')).toBe(false);
+    store.blockPeer(created.roomId, 'host', 'guest');
+    expect(store.isPairBlocked(created.roomId, 'host', 'guest')).toBe(true);
   });
 
   it('tracks peer membership for signaling guards', () => {

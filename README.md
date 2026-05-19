@@ -124,18 +124,48 @@ DeskCall-Setup.exe
 The repository includes placeholder icon assets in `apps/desktop/build/` plus installer metadata and
 versioning in `apps/desktop/package.json`.
 
-## Production deployment notes
+## Production deployment (free tier)
 
-You can deploy `apps/server` to Render, Railway, Fly.io, or a VPS:
+DeskCall is designed to run at **zero monthly cost** for the default stack:
 
-1. install dependencies
-2. run `npm run build --workspace @deskcall/server`
-3. start with `npm run start --workspace @deskcall/server`
-4. set `PORT`, `CORS_ORIGIN`, and any platform-required environment values
+| Piece | Free service | URL |
+|-------|----------------|-----|
+| Web app | GitHub Pages | `https://monaghanhc.github.io/Video-Chat/` |
+| Signaling | Render free web service | `https://deskcall-signaling.onrender.com` |
+| Media | WebRTC peer-to-peer | No relay cost (STUN is public) |
+| TURN | Optional | Bring your own only if NATs are difficult |
 
-The signaling server handles room creation, joins, presence updates, offers, answers, ICE candidates,
-disconnect cleanup, CORS, and basic rate limiting. Production auth would slot in before room admission
-and signaling dispatch.
+Pushes to `main` run CI (lint, tests, build), deploy the web app to GitHub Pages, and redeploy
+signaling on Render when connected via `render.yaml`.
+
+### One-time Render setup (after deploy)
+
+In the Render dashboard for `deskcall-signaling`, set:
+
+1. **`CORS_ORIGIN`** = `https://monaghanhc.github.io` (no trailing slash)
+2. **`JWT_ACCESS_SECRET`** = random string, at least 32 characters
+3. **`JWT_REFRESH_SECRET`** = different random string, at least 32 characters
+
+Generate secrets (PowerShell):
+
+```powershell
+[Convert]::ToBase64String((1..48 | ForEach-Object { Get-Random -Maximum 256 }))
+```
+
+Without the JWT secrets the server will not start. Guest video calls work without user signups;
+optional accounts use the SQLite file at `./data/deskcall.db` (ephemeral on Render free—resets on
+redeploy, which is fine for the beta).
+
+See `SECURITY_HARDENING.md` for the full security and environment reference.
+
+### Local production build smoke test
+
+```bash
+npm ci
+npm run lint
+npm run test
+npm run build
+```
 
 ### TURN support
 
@@ -153,7 +183,7 @@ NATs."
 
 ## Beta feature set
 
-- one-to-one WebRTC video calls
+- mesh WebRTC video calls (up to four participants)
 - local preview and remote participant video
 - mute, camera toggle, end-call controls
 - room creation and join by short invite code
@@ -172,7 +202,7 @@ NATs."
 
 - rooms support up to four participants in a mesh call
 - TURN credentials are not bundled; add your own before serious production rollout
-- there is no authentication or abuse prevention beyond lightweight rate limiting yet
+- optional accounts and guest tokens are supported; see `SECURITY_HARDENING.md` for production auth configuration
 - screen sharing currently uses Electron's capture flow without a custom branded source picker
 - macOS packaging is scaffolded but not yet notarized or tested
 

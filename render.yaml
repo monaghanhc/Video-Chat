@@ -9,9 +9,29 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22
+      - key: NODE_ENV
+        value: production
       - key: CORS_ORIGIN
         sync: false
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: AUTH_MODE
+        value: optional
+      - key: COOKIE_SECURE
+        value: true
+      - key: TRUST_PROXY
+        value: true
+      - key: DATABASE_PATH
+        value: ./data/deskcall.db
       - key: ROOM_RATE_LIMIT_WINDOW_MS
         value: 60000
       - key: ROOM_RATE_LIMIT_MAX
         value: 20
+      - key: ROOM_JOIN_RATE_LIMIT_MAX
+        value: 30
+      - key: SOCKET_EVENT_RATE_LIMIT_MAX
+        value: 120
+      - key: AUTH_RATE_LIMIT_MAX
+        value: 15
